@@ -16,14 +16,17 @@ def readData(filePath):
 
 #computes acceleration and time for raw data (according to Sean's formulas)
 def getAccelerationData(rawData):
-  accelerationData = pandas.DataFrame(columns = ['time','ay'])
   time0 = rawData['Time'].iloc[0]
   rawData = rawData.astype('float64')
-  for i in range(0,len(rawData.index)):
-    originalTime = rawData['Time'][i]
+  times = []
+  ay_vals = []
+  for i in range(0, len(rawData.index)):
+    originalTime = rawData['Time'].iloc[i]
     convertedTime = ((originalTime - time0)/100000000.0)*60.0
-    ay = -rawData['Sensor2'][i]/9.81
-    accelerationData = accelerationData.append({'time':convertedTime,'ay':ay},ignore_index=True)
+    ay = -rawData['Sensor2'].iloc[i]/9.81
+    times.append(convertedTime)
+    ay_vals.append(ay)
+  accelerationData = pandas.DataFrame({'time': times, 'ay': ay_vals})
   return accelerationData
 
 def getVelocityData(averageStroke):
