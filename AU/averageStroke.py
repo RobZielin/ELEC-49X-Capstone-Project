@@ -1,12 +1,17 @@
-# code created by Rebecca Hisley
+# code created by Rebecca Hisley and modified by Robert Zielinski
 
-import tensorflow.keras as k
+# modified to work with live data using a sample rate
+# some changes made to avoid deprecated pandas indexing warnings 
+# (original likely made with an older version of pandas)
+
 import numpy
 import pandas
-import scipy
 import os
 from scipy import signal
 from matplotlib import pyplot as plt
+
+# sample rate for live data
+SAMPLE_RATE_HZ = 15.0
 
 #reads the data from a csv file, returns data as a pandas array of accelerometer data
 def readData(filePath):
@@ -29,35 +34,34 @@ def getAccelerationData(rawData):
   accelerationData = pandas.DataFrame({'time': times, 'ay': ay_vals})
   return accelerationData
 
-def getVelocityData(averageStroke):
+def getVelocityData(averageStroke, sampling_rate_hz=15.0):
   v0 = 0
   velocityData = [0]
-  for i in range(1,len(averageStroke)):
-    vy = v0+averageStroke[i]*(1.0/15.0)*9.81 #1.0/15.0 represents sampling rate
+  for i in range(1, len(averageStroke)):
+    vy = v0 + averageStroke[i] * (1.0 / sampling_rate_hz) * 9.81
     velocityData.append(vy)
     v0 = vy
   return velocityData
 
 #separates the raw data into individual strokes, returns a list of strokes
-def getStrokes(accelerationData):
-  peakIndexes = getPeaks(accelerationData)
+def getStrokes(accelerationData, plot=False):
+  peakIndexes = getPeaks(accelerationData, plot=plot)
   strokeAccelerations = []
   for i in range(0,len(peakIndexes)-1):
-      accStroke = accelerationData['ay'][peakIndexes[i]:peakIndexes[i+1]]
+      accStroke = accelerationData['ay'].iloc[peakIndexes[i]:peakIndexes[i+1]]
       accStroke = accStroke.to_numpy()
       strokeAccelerations.append(accStroke)
   return strokeAccelerations
 
-def getPeaks(accelerationData):
+def getPeaks(accelerationData, plot=False):
   negAy= -1*accelerationData['ay']
   trueAy = accelerationData['ay']
   peaks, properties = signal.find_peaks(negAy, prominence=1,width=0.000001)
-  properties["prominences"], properties["widths"]
-  (numpy.array([1.495, 2.3  ]), numpy.array([36.93773946, 39.32723577]))
-  plt.plot(trueAy)
-  plt.title('All Strokes')
-  plt.plot(peaks, trueAy[peaks], "x")
-  plt.show()
+  if plot:
+    plt.plot(trueAy)
+    plt.title('All Strokes')
+    plt.plot(peaks, trueAy[peaks], "x")
+    plt.show()
   return peaks
 
 #takes a single stroke and resamples it so that the average can be taken
@@ -71,12 +75,13 @@ def ressampleStrokes(allStrokes, resampleIndexes, numSamples):
 
 #computes the most common number of samples per stroke, minimizes the number of strokes that need to be resampled
 def getMostCommonNumSamples(sampleLengths):
-  sampleLengthsData = pandas.DataFrame({'NumSamples':sampleLengths,'Count':[1 for i in range(len(sampleLengths))]})
+  sampleLengthsData = pandas.DataFrame({'NumSamples': sampleLengths, 'Count': [1 for _ in range(len(sampleLengths))]})
   counts = sampleLengthsData.groupby('NumSamples').count()
-  mostCommonNumSamples = counts.idxmax()[0]
+  # Select the NumSamples value (index) with the max count to avoid positional indexing deprecations
+  mostCommonNumSamples = counts['Count'].idxmax()
   resampleIndexes = sampleLengthsData.loc[sampleLengthsData['NumSamples'] != mostCommonNumSamples].index
   resampleIndexes = resampleIndexes.tolist()
-  return (mostCommonNumSamples,resampleIndexes)
+  return (mostCommonNumSamples, resampleIndexes)
 
 #Creates a visual plot of the average stroke
 def showAveragePlot(acceleration = None,velocity = None):
@@ -94,18 +99,18 @@ def showAveragePlot(acceleration = None,velocity = None):
   plt.show()
 
 #Computes the average stroke from the resampled strokes
-def getAverageStroke(allStrokes):
+def getAverageStroke(allStrokes, sampling_rate_hz=SAMPLE_RATE_HZ):
   sampleLengths = [x.shape[0] for x in allStrokes]
   mostCommonNumSamples, resampleIndexes = getMostCommonNumSamples(sampleLengths)
   resampledStrokes = ressampleStrokes(allStrokes, resampleIndexes, mostCommonNumSamples)
-  averageStroke = numpy.mean(allStrokes,axis=0)
-  stdDeviation = numpy.std(allStrokes,axis=0)
+  averageStroke = numpy.mean(resampledStrokes,axis=0)
+  stdDeviation = numpy.std(resampledStrokes,axis=0)
   stdDevLower = []
   stdDevUpper = []
   for i in range(0,len(averageStroke)):
     stdDevLower.append(averageStroke[i]-stdDeviation[i])
     stdDevUpper.append(averageStroke[i]+stdDeviation[i])
-  averageVelocity = getVelocityData(averageStroke)
+  averageVelocity = getVelocityData(averageStroke, sampling_rate_hz=sampling_rate_hz)
   velocityStdDevLower = []
   velocitystdDevUpper = []
   for i in range(0,len(averageVelocity)):
