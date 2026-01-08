@@ -7,7 +7,9 @@ UART_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 UART_TX      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # recieving
 UART_RX      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # writing
 
-ESP32_ADDR = "" # need to find this
+# read ESP32 address from config file
+with open ("ESP32.cfg", "r") as f:
+    ESP32_ADDR = f.read().strip()
 
 async def main():
     def handle_rx(sender, data):
