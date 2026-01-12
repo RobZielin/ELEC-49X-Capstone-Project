@@ -1,4 +1,4 @@
-# used to find nearby BLE devices for use in blueotooth.py
+# used to find nearby BLE devices for use in bluetooth.py
 
 from bleak import BleakScanner
 import asyncio
