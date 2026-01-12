@@ -1,31 +1,112 @@
 # code to connect to the ESP32 via bluetooth and send/receive data
 
 import asyncio
-from bleak import BleakClient
+import contextlib
+import struct
+from bleak import BleakClient, BleakError
 
+
+# from micropython documentation
 UART_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-UART_TX      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # recieving
-UART_RX      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # writing
+UART_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # receiving
+UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # transmitting
 
 # read ESP32 address from config file
-with open ("ESP32.cfg", "r") as f:
+with open("Networking/ESP32.cfg", "r") as f:
     ESP32_ADDR = f.read().strip()
 
-async def main():
+
+def decode_to_float(data: bytes):
+    # Try to decode as text first (for semicolon-separated values)
+    try:
+        text = data.decode('utf-8').strip()
+        if ' ' in text:
+            return text
+        # Otherwise try to parse as a single float
+        return float(text)
+    except (UnicodeDecodeError, ValueError):
+        # Fall back to binary formats if text decoding fails
+        if len(data) == 4:
+            return struct.unpack("<f", data)[0]
+        if len(data) == 2:
+            return float(struct.unpack("<h", data)[0])
+        if len(data) == 1:
+            return float(data[0])
+        if len(data) % 4 == 0:
+            return [struct.unpack("<f", data[i : i + 4])[0] for i in range(0, len(data), 4)]
+        return data
+
+
+async def keep_alive(client: BleakClient, interval: float = 8.0) -> None:
+    """Send small pings to keep the link active."""
+    while True:
+        try:
+            await client.write_gatt_char(UART_RX, b"ping")
+        except Exception:
+            return
+        await asyncio.sleep(interval)
+
+
+async def run_client() -> None:
     def handle_rx(sender, data):
-        print("ESP32 → PC:", data)
+        decoded = decode_to_float(data)
+        
+        # Parse format: "1 x 1.000" (sequence_number x_coordinate measured_value)
+        if isinstance(decoded, str):
+            try:
+                parts = decoded.split()
+                if len(parts) == 3:
+                    seq_num = parts[0]
+                    x_coord = parts[1]
+                    measured_value = parts[2]
+                    print(f"Seq: {seq_num} | Coord: {x_coord} | Value: {measured_value}")
+                else:
+                    print("ESP32 -> PC:", decoded)
+            except Exception as e:
+                print("ESP32 -> PC:", decoded)
+        else:
+            print("ESP32 -> PC:", decoded)
 
 
-    # asynchronous function that sends a test message and listens for notifications
-    async with BleakClient(ESP32_ADDR) as client:
-        print("Connected:", client.is_connected)
+    while True:
+        disconnect_event = asyncio.Event()
 
-        await client.start_notify(UART_TX, handle_rx)
+        def handle_disconnect(_client):
+            print("Disconnected, will retry...")
+            disconnect_event.set()
 
-        # write to client
-        await client.write_gatt_char(UART_RX, b"hello")
+        try:
+            async with BleakClient(ESP32_ADDR, disconnected_callback=handle_disconnect) as client:
+                print("Connected:", client.is_connected)
+                await client.start_notify(UART_TX, handle_rx)
 
-        # listen
-        await asyncio.sleep(10)
+                # send initial message and keep the link alive
+                await client.write_gatt_char(UART_RX, b"batman")
+                keep_task = asyncio.create_task(keep_alive(client))
 
-asyncio.run(main())
+                # wait until the client drops; the context manager will close cleanly
+                await disconnect_event.wait()
+                # ensure the keep-alive task stops when the link is gone
+                keep_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await keep_task
+        except BleakError as exc:
+            print(f"Connection error: {exc}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"Unexpected error: {exc}")
+
+        # back off briefly before reconnecting
+        await asyncio.sleep(3)
+
+
+async def main() -> None:
+    try:
+        await run_client()
+    except KeyboardInterrupt:
+        print("Stopping on user request")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
