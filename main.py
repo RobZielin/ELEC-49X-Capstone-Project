@@ -21,6 +21,7 @@ data_points = {"x": [], "y": [], "z": []}  # coord -> [values]
 plot_fig = None
 plot_ax = None
 point_count = 0
+use_window = True 
 
 
 def decode_to_float(data: bytes):
@@ -68,7 +69,7 @@ def init_plot():
 
 def update_plot():
     """Update the plot with current data."""
-    global plot_ax, data_points, point_count
+    global plot_ax, data_points, point_count, use_window
     plot_ax.clear()
     plot_ax.set_xlabel('Point Index')
     plot_ax.set_ylabel('Measured Value')
@@ -78,11 +79,21 @@ def update_plot():
     # Define colors for each coordinate
     colors = {"x": "red", "y": "blue", "z": "green"}
     
-    # Plot each coordinate as a line
+    # Plot each coordinate as a smooth line
     for coord in ["x", "y", "z"]:
         if data_points[coord]:
-            plot_ax.plot(range(len(data_points[coord])), data_points[coord], 
-                        color=colors[coord], label=coord.upper(), linewidth=2, marker='o', markersize=3)
+            if use_window:
+                # Only show the most recent 100 points
+                window_size = 100
+                recent_data = data_points[coord][-window_size:]
+                start_idx = max(0, len(data_points[coord]) - window_size)
+                x_indices = range(start_idx, start_idx + len(recent_data))
+                plot_ax.plot(x_indices, recent_data, 
+                            color=colors[coord], label=coord.upper(), linewidth=2)
+            else:
+                # Show all data points
+                plot_ax.plot(range(len(data_points[coord])), data_points[coord], 
+                            color=colors[coord], label=coord.upper(), linewidth=2)
     
     plot_ax.legend()
     plot_fig.canvas.draw()
@@ -94,26 +105,26 @@ async def run_client() -> None:
         global data_points, point_count
         decoded = decode_to_float(data)
         
-        # Parse format: "1 x 1.000" (sequence_number coordinate measured_value)
+        # Parse format: "<sequence> x <X> y <Y> z <Z>"
         if isinstance(decoded, str):
             try:
                 parts = decoded.split()
-                if len(parts) == 3:
+                if len(parts) == 7 and parts[1] == 'x' and parts[3] == 'y' and parts[5] == 'z':
                     seq_num = parts[0]
-                    coord_type = parts[1]  # "x", "y", or "z"
-                    measured_value = float(parts[2])
+                    x_value = float(parts[2])
+                    y_value = float(parts[4])
+                    z_value = float(parts[6])
                     
                     # Store data for x, y, z coordinates
-                    if coord_type in ["x", "y", "z"]:
-                        data_points[coord_type].append(measured_value)
-                        point_count += 1
-                        
-                        print(f"Seq: {seq_num} | Coord: {coord_type} | Value: {measured_value}")
-                        
-                        # Update plot
-                        update_plot()
-                    else:
-                        print("ESP32 -> PC:", decoded)
+                    data_points['x'].append(x_value)
+                    data_points['y'].append(y_value)
+                    data_points['z'].append(z_value)
+                    point_count += 1
+                    
+                    print(f"Seq: {seq_num} | X: {x_value} | Y: {y_value} | Z: {z_value}")
+                    
+                    # Update plot
+                    update_plot()
                 else:
                     print("ESP32 -> PC:", decoded)
             except Exception as e:

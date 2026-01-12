@@ -51,15 +51,17 @@ async def run_client() -> None:
     def handle_rx(sender, data):
         decoded = decode_to_float(data)
         
-        # Parse format: "1 x 1.000" (sequence_number x_coordinate measured_value)
+        # Parse format: "<sequence> x <X> y <Y> z <Z>"
         if isinstance(decoded, str):
             try:
                 parts = decoded.split()
-                if len(parts) == 3:
+                if len(parts) == 7 and parts[1] == 'x' and parts[3] == 'y' and parts[5] == 'z':
                     seq_num = parts[0]
-                    x_coord = parts[1]
-                    measured_value = parts[2]
-                    print(f"Seq: {seq_num} | Coord: {x_coord} | Value: {measured_value}")
+                    x_value = float(parts[2])
+                    y_value = float(parts[4])
+                    z_value = float(parts[6])
+                    
+                    print(f"Seq: {seq_num} | X: {x_value} | Y: {y_value} | Z: {z_value}")
                 else:
                     print("ESP32 -> PC:", decoded)
             except Exception as e:
