@@ -192,6 +192,11 @@ def update_avg_stroke_plot():
 
 
 async def run_client() -> None:
+    # Initialize plots once, outside the connection loop
+    global data_points, point_count, plot_fig, plot_ax, plot_avg_fig, plot_avg_ax
+    init_plot()
+    init_avg_stroke_plot()
+    
     def handle_rx(sender, data):
         global data_points, point_count
         decoded = decode_to_float(data)
@@ -238,8 +243,22 @@ async def run_client() -> None:
         try:
             async with BleakClient(ESP32_ADDR, disconnected_callback=handle_disconnect) as client:
                 print("Connected:", client.is_connected)
-                init_plot()  # Initialize the real-time plot
-                init_avg_stroke_plot()  # Initialize the average stroke plot
+                # Reset data and plots on reconnection
+                data_points = {"x": [], "y": [], "z": []}
+                point_count = 0
+                plot_ax.clear()
+                plot_ax.set_xlabel('Point Index')
+                plot_ax.set_ylabel('Measured Value')
+                plot_ax.set_title('Real-Time Data from ESP32')
+                plot_ax.grid(True)
+                plot_avg_ax.clear()
+                plot_avg_ax.set_xlabel('Sample Index')
+                plot_avg_ax.set_ylabel('Acceleration (g)')
+                plot_avg_ax.set_title('Average Stroke Analysis')
+                plot_avg_ax.grid(True)
+                plot_fig.canvas.draw()
+                plot_avg_fig.canvas.draw()
+                
                 await client.start_notify(UART_TX, handle_rx)
 
                 # send initial message and keep the link alive
