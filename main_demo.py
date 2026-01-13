@@ -209,7 +209,7 @@ def process_csv_file(csv_path):
 
 async def main():
     """Main async function to run the demo."""
-    global data_points, plot_fig, plot_ax
+    global data_points, plot_fig, plot_ax, plot_avg_ax, plot_avg_fig
     
     # Find data directory
     data_dir = os.path.join(os.path.dirname(__file__), 'TestScripts', 'data')
@@ -224,10 +224,6 @@ async def main():
     print(f"\nFound {len(csv_files)} CSV files:")
     for i, f in enumerate(csv_files, 1):
         print(f"  {i}. {f}")
-    
-    # Initialize plots
-    init_plot()
-    init_avg_stroke_plot()
     
     # Process each CSV file
     for csv_file in csv_files:
@@ -247,17 +243,21 @@ async def main():
         process_csv_file(csv_path)
         
         print(f"  Completed: {len(data_points['z'])} points processed\n")
-    
-    print("Demo completed! Close the plot windows to exit.")
-    
-    # Keep plot windows open
-    try:
-        plt.show()
-    except KeyboardInterrupt:
-        print("Stopped by user")
 
 
 if __name__ == "__main__":
     print("CSV Data Replay Demo")
     print("=" * 50)
-    asyncio.run(main())
+    
+    # Initialize plots once
+    init_plot()
+    init_avg_stroke_plot()
+    
+    # Run demo in a loop that restarts
+    try:
+        while True:
+            asyncio.run(main())
+            print("Demo completed! Restarting...\n")
+    except KeyboardInterrupt:
+        print("Stopped by user")
+        plt.close('all')
