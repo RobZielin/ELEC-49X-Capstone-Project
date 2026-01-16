@@ -1,4 +1,4 @@
-# code created by Rebecca Hisley and modified by Robert Zielinski
+# code created by Rebecca Hisey and modified by Robert Zielinski
 
 # modified to work with live data using a sample rate
 # some changes made to avoid deprecated pandas indexing warnings 

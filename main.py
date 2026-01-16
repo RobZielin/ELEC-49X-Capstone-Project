@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'AU'))
 from AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
 
 
-# from micropython documentation
 UART_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 UART_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # receiving
 UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # transmitting
@@ -88,6 +87,38 @@ def init_avg_stroke_plot():
     plot_avg_ax.set_title('Average Stroke Analysis')
     plot_avg_ax.grid(True)
     return plot_avg_fig, plot_avg_ax
+
+
+def reset_plots():
+    """Reset all plots and data when 'p' is pressed."""
+    global data_points, point_count, plot_ax, plot_avg_ax, plot_fig, plot_avg_fig
+    print("Resetting plots and data...")
+    data_points = {"x": [], "y": [], "z": []}
+    point_count = 0
+    
+    # Clear and reset main plot
+    plot_ax.clear()
+    plot_ax.set_xlabel('Point Index')
+    plot_ax.set_ylabel('Measured Value')
+    plot_ax.set_title('Real-Time Data from ESP32')
+    plot_ax.grid(True)
+    
+    # Clear and reset average stroke plot
+    plot_avg_ax.clear()
+    plot_avg_ax.set_xlabel('Sample Index')
+    plot_avg_ax.set_ylabel('Acceleration (g)')
+    plot_avg_ax.set_title('Average Stroke Analysis')
+    plot_avg_ax.grid(True)
+    
+    # Redraw both figures
+    plot_fig.canvas.draw()
+    plot_avg_fig.canvas.draw()
+
+
+def on_key_press(event):
+    """Handle keyboard events."""
+    if event.key == 'p':
+        reset_plots()
 
 
 def update_plot():
@@ -196,6 +227,10 @@ async def run_client() -> None:
     global data_points, point_count, plot_fig, plot_ax, plot_avg_fig, plot_avg_ax
     init_plot()
     init_avg_stroke_plot()
+    
+    # Register keyboard event handler for both plots
+    plot_fig.canvas.mpl_connect('key_press_event', on_key_press)
+    plot_avg_fig.canvas.mpl_connect('key_press_event', on_key_press)
     
     def handle_rx(sender, data):
         global data_points, point_count
