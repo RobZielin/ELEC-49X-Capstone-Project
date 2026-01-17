@@ -2,14 +2,12 @@
 # Reads CSV files from TestScripts/data/ and simulates real-time data reception
 
 import asyncio
-import struct
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas
 import sys
 import os
 import time
-from scipy import signal
 
 # Import average stroke functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'AU'))

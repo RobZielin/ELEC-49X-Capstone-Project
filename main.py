@@ -6,10 +6,8 @@ import struct
 from bleak import BleakClient, BleakError
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas
 import sys
 import os
-from scipy import signal
 
 # Import average stroke functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'AU'))
