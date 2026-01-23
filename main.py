@@ -6,14 +6,11 @@ import struct
 from bleak import BleakClient, BleakError
 import matplotlib.pyplot as plt
 import numpy as np
-import sys
 import os
 
-# Import average stroke functions
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'AU'))
 from AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
 
-
+# UART UUIDs
 UART_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 UART_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # receiving
 UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # transmitting
@@ -22,16 +19,24 @@ UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # transmitting
 with open("Networking/ESP32.cfg", "r") as f:
     ESP32_ADDR = f.read().strip()
 
-# Global data storage for plotting
+# global data
 data_points = {"x": [], "y": [], "z": []}  # coord -> [values]
 plot_fig = None
 plot_ax = None
 plot_avg_fig = None
 plot_avg_ax = None
 point_count = 0
-use_window = True 
-avg_stroke_update_interval = 50  # Update average every N data points
 
+# keeps the plot more clean by only showing the most recent 100 points
+use_window = True 
+window = 100
+
+# how often to update the average stroke
+avg_stroke_update_interval = 50 
+
+
+# dont think this is needed anymore
+# TODO: rewrite to assume data is sent in the specific format
 
 def decode_to_float(data: bytes):
     # Try to decode as text first (for semicolon-separated values)
@@ -54,8 +59,8 @@ def decode_to_float(data: bytes):
         return data
 
 
+# asyncronous function to keep the bluetooth connection alive
 async def keep_alive(client: BleakClient, interval: float = 8.0) -> None:
-    """Send small pings to keep the link active."""
     while True:
         try:
             await client.write_gatt_char(UART_RX, b"ping")
@@ -63,11 +68,12 @@ async def keep_alive(client: BleakClient, interval: float = 8.0) -> None:
             return
         await asyncio.sleep(interval)
 
+# plotting functions
 
 def init_plot():
     """Initialize the matplotlib plot for real-time visualization."""
     global plot_fig, plot_ax
-    plt.ion()  # Turn on interactive mode
+    plt.ion() 
     plot_fig, plot_ax = plt.subplots(figsize=(10, 6))
     plot_ax.set_xlabel('Sequence Number')
     plot_ax.set_ylabel('Measured Value')
@@ -135,8 +141,7 @@ def update_plot():
     for coord in ["x", "y", "z"]:
         if data_points[coord]:
             if use_window:
-                # Only show the most recent 100 points
-                window_size = 100
+                window_size = window
                 recent_data = data_points[coord][-window_size:]
                 start_idx = max(0, len(data_points[coord]) - window_size)
                 x_indices = range(start_idx, start_idx + len(recent_data))
@@ -234,7 +239,7 @@ async def run_client() -> None:
         global data_points, point_count
         decoded = decode_to_float(data)
         
-        # Parse format: "<sequence> x <X> y <Y> z <Z>"
+        # format: "<sequence> x <X> y <Y> z <Z>"
         if isinstance(decoded, str):
             try:
                 parts = decoded.split()
@@ -244,7 +249,7 @@ async def run_client() -> None:
                     y_value = float(parts[4])
                     z_value = float(parts[6])
                     
-                    # Store data for x, y, z coordinates
+                    # append coords
                     data_points['x'].append(x_value)
                     data_points['y'].append(y_value)
                     data_points['z'].append(z_value)
@@ -252,7 +257,6 @@ async def run_client() -> None:
                     
                     #print(f"Seq: {seq_num} | X: {x_value} | Y: {y_value} | Z: {z_value}")
                     
-                    # Update live plot
                     update_plot()
                     
                     # Periodically update average stroke plot
@@ -294,13 +298,11 @@ async def run_client() -> None:
                 
                 await client.start_notify(UART_TX, handle_rx)
 
-                # send initial message and keep the link alive
-                await client.write_gatt_char(UART_RX, b"batman")
+                #await client.write_gatt_char(UART_RX, b"batman")
                 keep_task = asyncio.create_task(keep_alive(client))
 
-                # wait until the client drops; the context manager will close cleanly
+                # on disconnect
                 await disconnect_event.wait()
-                # ensure the keep-alive task stops when the link is gone
                 keep_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await keep_task
@@ -311,7 +313,7 @@ async def run_client() -> None:
         except Exception as exc:
             print(f"Unexpected error: {exc}")
 
-        # back off briefly before reconnecting
+
         await asyncio.sleep(3)
 
 
