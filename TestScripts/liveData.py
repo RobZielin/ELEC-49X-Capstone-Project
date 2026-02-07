@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from typing import Iterable, Optional, Tuple, List
 
-from averageStroke import getStrokes, getAverageStroke
+from AU.averageStroke import getStrokes, getAverageStroke
 
 
 class LiveStrokeAverager:

@@ -2,13 +2,16 @@
 
 import asyncio
 import contextlib
+from http import client
 import struct
+import time
 from bleak import BleakClient, BleakError
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 
 from AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
+from Networking.receive_ble import ReceivedDataWriter
 
 # UART UUIDs
 UART_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -26,6 +29,9 @@ plot_ax = None
 plot_avg_fig = None
 plot_avg_ax = None
 point_count = 0
+
+# Save-on-request state
+save_writer = None
 
 # keeps the plot more clean by only showing the most recent 100 points
 use_window = True 
@@ -63,7 +69,7 @@ def decode_to_float(data: bytes):
 async def keep_alive(client: BleakClient, interval: float = 8.0) -> None:
     while True:
         try:
-            await client.write_gatt_char(UART_RX, b"ping")
+            await client.write_gatt_char(UART_RX, True)
         except Exception:
             return
         await asyncio.sleep(interval)
@@ -123,6 +129,9 @@ def on_key_press(event):
     """Handle keyboard events."""
     if event.key == 'p':
         reset_plots()
+
+async def request_data(client: BleakClient) -> None:
+    await client.write_gatt_char(UART_RX, b"GIMMEH DATAH")
 
 
 def update_plot():
@@ -236,11 +245,20 @@ async def run_client() -> None:
     plot_avg_fig.canvas.mpl_connect('key_press_event', on_key_press)
     
     def handle_rx(sender, data):
-        global data_points, point_count
+        global data_points, point_count, save_writer
+        #print(f"RX notify from {sender}: {data!r}")
         decoded = decode_to_float(data)
         
         # format: "<sequence> x <X> y <Y> z <Z>"
         if isinstance(decoded, str):
+            normalized = decoded.strip()
+            if normalized.startswith("[OLD]"):
+                if save_writer is None:
+                    save_writer = ReceivedDataWriter()
+                    print(f"Saving received data to {save_writer.path}")
+                old_line = normalized[len("[OLD]"):].strip()
+                if save_writer.handle_line(old_line):
+                    return
             try:
                 parts = decoded.split()
                 if len(parts) == 7 and parts[1] == 'x' and parts[3] == 'y' and parts[5] == 'z':
@@ -298,11 +316,13 @@ async def run_client() -> None:
                 
                 await client.start_notify(UART_TX, handle_rx)
 
-                #await client.write_gatt_char(UART_RX, b"batman")
                 keep_task = asyncio.create_task(keep_alive(client))
 
                 # on disconnect
-                await disconnect_event.wait()
+                try:
+                    await disconnect_event.wait()
+                except asyncio.CancelledError:
+                    pass
                 keep_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await keep_task
@@ -321,6 +341,8 @@ async def main() -> None:
     try:
         await run_client()
     except KeyboardInterrupt:
+        print("Stopping on user request")
+    except asyncio.CancelledError:
         print("Stopping on user request")
 
 
