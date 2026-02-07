@@ -7,31 +7,41 @@
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 
+#include "LittleFS.h"
+
 Adafruit_MPU6050 mpu;
 
 BLEServer *pServer = NULL;
 BLECharacteristic *pTxCharacteristic;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-uint8_t txValueX = 0;
-uint8_t txValueY = 0;
-uint8_t txValueZ = 0;
-uint8_t txValueT = 0;
 
 #define DELAY 50
+#define BUFFER_SIZE 32  // Number of records to buffer in RAM before writing to LittleFS
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
-
 #define SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"  // UART service UUID
 #define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+
+// Binary record structure
+struct Record {
+  uint32_t seq;   // Sequence number
+  float x;        // Accelerometer X
+  float y;        // Accelerometer Y
+  float z;        // Accelerometer Z
+};
+
+// RAM buffer to store multiple records before writing to flash
+Record buffer[BUFFER_SIZE];
+uint8_t bufferIndex = 0;
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) {
     deviceConnected = true;
     Serial.println("Device connected");
-  };
+  }
 
   void onDisconnect(BLEServer *pServer) {
     deviceConnected = false;
@@ -39,35 +49,88 @@ class MyServerCallbacks : public BLEServerCallbacks {
   }
 };
 
+void sendSavedData(); // prototype
+
 class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) {
     String rxValue = pCharacteristic->getValue();
 
-    if (rxValue.length() > 0) {
-      Serial.println("*********");
-      Serial.print("Received Value: ");
-      for (int i = 0; i < rxValue.length(); i++) {
-        Serial.print(rxValue[i]);
-      }
+    Serial.print("Received Value: ");
+    Serial.print(rxValue);
+    Serial.println();
 
-      Serial.println();
-      Serial.println("*********");
-    }
+    if (rxValue == "GIMMEH DATAH") sendSavedData();
+
   }
 };
+  
+#define SEND_CHUNK 4  // number of records to send per loop iteration
+
+File sendFile;      // file handle for sending data
+bool sendingData = false;  // flag to indicate we're in the middle of sending
+
+void sendSavedData() {
+  sendFile = LittleFS.open("/data.bin", "r");
+  if (!sendFile) {
+    Serial.println("Failed to open data.bin for reading");
+    sendingData = false;
+    return;
+  }
+
+  sendingData = true;
+  Serial.println("Started sending saved data...");
+}
+
+void sendDataChunk() {
+  if (!sendingData || !sendFile) return;
+
+  Record r;
+  char buffer[80];
+
+  for (int i = 0; i < SEND_CHUNK; i++) {
+    if (sendFile.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) {
+      // Finished sending all records
+      sendFile.close();
+      sendingData = false;
+      Serial.println("Finished sending saved data.");
+      return;
+    }
+
+    snprintf(buffer, sizeof(buffer), "[OLD] %lu x %.3f y %.3f z %.3f",
+             r.seq, r.x, r.y, r.z);
+
+    pTxCharacteristic->setValue(buffer);
+    pTxCharacteristic->notify();
+  }
+
+  delay(10);
+}
+
+// Function to flush buffered records to LittleFS
+void flushBuffer() {
+  if (bufferIndex == 0) return; // Nothing to flush
+  File f = LittleFS.open("/data.bin", FILE_APPEND); // Open file in append mode
+  if (f) {
+    f.write((uint8_t*)buffer, sizeof(Record) * bufferIndex); // Write all buffered records
+    f.close();
+  }
+  bufferIndex = 0; // Reset buffer index after flush
+}
 
 void setup() {
   Serial.begin(115200);
 
+  // Wait for serial monitor to open (useful for Zero, Leonardo, etc.)
   while (!Serial) {
-    delay(10);  // will pause Zero, Leonardo, etc until serial console opens
+    delay(10);
   }
+
+  // Initialize MPU6050
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
+    while (1) delay(10);
   }
+
   mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
   mpu.setGyroRange(MPU6050_RANGE_250_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
@@ -75,7 +138,7 @@ void setup() {
   delay(10);
 
   // Create the BLE Device
-  BLEDevice::init("UART Service");
+  BLEDevice::init("BKFB AU");
 
   // Create the BLE Server
   pServer = BLEDevice::createServer();
@@ -84,22 +147,45 @@ void setup() {
   // Create the BLE Service
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // Create a BLE Characteristic
-  pTxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_TX, BLECharacteristic::PROPERTY_NOTIFY);
-
-  // Descriptor 2902 is not required when using NimBLE as it is automatically added based on the characteristic properties
+  // Create BLE TX Characteristic
+  pTxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_TX,
+                                                    BLECharacteristic::PROPERTY_NOTIFY);
+  // Descriptor 2902 is automatically added when using NimBLE
   pTxCharacteristic->addDescriptor(new BLE2902());
 
-  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, BLECharacteristic::PROPERTY_WRITE);
-
+  // Create BLE RX Characteristic
+  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+      CHARACTERISTIC_UUID_RX,
+      BLECharacteristic::PROPERTY_WRITE);
   pRxCharacteristic->setCallbacks(new MyCallbacks());
 
-  // Start the service
+  // Start the BLE service
   pService->start();
 
   // Start advertising
   pServer->getAdvertising()->start();
   Serial.println("Waiting a client connection to notify...");
+
+  // Initialize LittleFS and format if first time
+  if (!LittleFS.begin(true)){
+    Serial.println("LittleFS Mount Failed");
+    return;
+  }
+
+  // //overwrite file
+  // File file = LittleFS.open("/data.bin", FILE_WRITE);
+  // if(!file){
+  //   Serial.println("Failed to open file for writing");
+  //   return;
+  // }
+  // file.close();
+
+  // wipe data
+    if (LittleFS.format()) {
+    Serial.println("LittleFS formatted successfully!");
+  } else {
+    Serial.println("LittleFS format failed!");
+  }
 }
 
 void loop() {
@@ -108,27 +194,59 @@ void loop() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  if (deviceConnected) {
+  // Build a binary record
+  Record r;
+  r.seq = sequence;
+  r.x = a.acceleration.x;
+  r.y = a.acceleration.y;
+  r.z = a.acceleration.z;
 
-    // Build a single formatted string with all three axes
-    char buffer[64];  // make sure it's large enough
-    snprintf(buffer, sizeof(buffer), "%lu x %.3f y %.3f z %.3f",
-             sequence, a.acceleration.x, a.acceleration.y, a.acceleration.z);
-
-    // Send all axes in one BLE notification
-    pTxCharacteristic->setValue(buffer);
-    pTxCharacteristic->notify();
-
-    // Small delay to avoid flooding BLE
-    delay(DELAY);
-
-    // Increment sequence for next sample
-    sequence++;
+  // send data in chunks
+  if (sendingData){
+    sendDataChunk();
+    return;
   }
+
+  // If no BLE device connected, store locally in buffer
+  if (!deviceConnected) {
+    buffer[bufferIndex++] = r;
+
+    // Flush buffer to LittleFS when full
+    if (bufferIndex >= BUFFER_SIZE) {
+      flushBuffer();
+    }
+
+    // // debug statement
+    // Serial.print(sequence);
+    // Serial.print(", ");
+    // Serial.print(a.acceleration.x); Serial.print(", ");
+    // Serial.print(a.acceleration.y); Serial.print(", ");
+    // Serial.println(a.acceleration.z);
+
+    sequence++;
+
+  } else {  // Device connected, send data over BLE
+
+    if (!sendingData) {  // only send live data if not sending recorded data
+      if (deviceConnected) {
+        char bufferStr[64];
+        snprintf(bufferStr, sizeof(bufferStr), "%lu x %.3f y %.3f z %.3f",
+                r.seq, r.x, r.y, r.z);
+
+        pTxCharacteristic->setValue(bufferStr);
+        pTxCharacteristic->notify();
+        delay(DELAY);
+
+        sequence++;
+      }
+  }
+}
 
   // Handle BLE reconnecting
   if (!deviceConnected && oldDeviceConnected) {
     delay(500);
+    flushBuffer();  // Ensure remaining records are saved
+    sequence = 1;   // Reset sequence when disconnected for too long
     pServer->startAdvertising();
     Serial.println("Started advertising again...");
     oldDeviceConnected = false;
