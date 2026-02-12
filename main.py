@@ -308,6 +308,7 @@ async def run_client() -> None:
             async with BleakClient(ESP32_ADDR, disconnected_callback=handle_disconnect) as client:
                 print("Connected:", client.is_connected)
                 active_client = client
+                await client.write_gatt_char(UART_RX, b"batman")
                 # Reset data and plots on reconnection
                 data_points = {"x": [], "y": [], "z": []}
                 point_count = 0
