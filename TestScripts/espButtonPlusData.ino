@@ -113,6 +113,13 @@ void sendDataChunk() {
       sendFile.close();
       sendingData = false;
       Serial.println("Finished sending saved data.");
+
+      // wipe data since it was sent
+      if (LittleFS.format()) {
+        Serial.println("Data wiped after sending.");
+      } else {
+        Serial.println("LittleFS format failed!");
+      }
       return;
     }
 
@@ -221,12 +228,12 @@ void setup() {
   // }
   // file.close();
 
-  // wipe data
-  if (LittleFS.format()) {
-    Serial.println("LittleFS formatted successfully!");
-  } else {
-    Serial.println("LittleFS format failed!");
-  }
+  // // wipe data
+  // if (LittleFS.format()) {
+  //   Serial.println("LittleFS formatted successfully!");
+  // } else {
+  //   Serial.println("LittleFS format failed!");
+  // }
   ////////////////////////////////////bluetooth end
 }
 

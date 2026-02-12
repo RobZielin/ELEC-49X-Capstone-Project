@@ -29,6 +29,8 @@ plot_ax = None
 plot_avg_fig = None
 plot_avg_ax = None
 point_count = 0
+event_loop = None
+active_client = None
 
 # Save-on-request state
 save_writer = None
@@ -127,8 +129,14 @@ def reset_plots():
 
 def on_key_press(event):
     """Handle keyboard events."""
+    global event_loop, active_client
     if event.key == 'p':
         reset_plots()
+    elif event.key == 'c':
+        if event_loop is None or active_client is None:
+            print("No active connection to request data.")
+            return
+        event_loop.create_task(request_data(active_client))
 
 async def request_data(client: BleakClient) -> None:
     await client.write_gatt_char(UART_RX, b"GIMMEH DATAH")
@@ -236,9 +244,10 @@ def update_avg_stroke_plot():
 
 async def run_client() -> None:
     # Initialize plots once, outside the connection loop
-    global data_points, point_count, plot_fig, plot_ax, plot_avg_fig, plot_avg_ax
+    global data_points, point_count, plot_fig, plot_ax, plot_avg_fig, plot_avg_ax, event_loop, active_client
     init_plot()
     init_avg_stroke_plot()
+    event_loop = asyncio.get_running_loop()
     
     # Register keyboard event handler for both plots
     plot_fig.canvas.mpl_connect('key_press_event', on_key_press)
@@ -298,6 +307,7 @@ async def run_client() -> None:
         try:
             async with BleakClient(ESP32_ADDR, disconnected_callback=handle_disconnect) as client:
                 print("Connected:", client.is_connected)
+                active_client = client
                 # Reset data and plots on reconnection
                 data_points = {"x": [], "y": [], "z": []}
                 point_count = 0
@@ -326,6 +336,7 @@ async def run_client() -> None:
                 keep_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await keep_task
+                active_client = None
         except BleakError as exc:
             print(f"Connection error: {exc}")
         except asyncio.CancelledError:

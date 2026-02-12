@@ -180,13 +180,13 @@ void setup() {
   // }
   // file.close();
 
-  // wipe data
-    if (LittleFS.format()) {
-    Serial.println("LittleFS formatted successfully!");
-  } else {
-    Serial.println("LittleFS format failed!");
-  }
-}
+//   // wipe data
+//   if (LittleFS.format()) {
+//     Serial.println("LittleFS formatted successfully!");
+//   } else {
+//     Serial.println("LittleFS format failed!");
+//   }
+// }
 
 void loop() {
   static uint32_t sequence = 1;  // sequence counter
