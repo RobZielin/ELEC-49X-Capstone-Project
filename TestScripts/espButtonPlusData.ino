@@ -1,24 +1,4 @@
 
-const int ledPin[3] = { 25, 33, 32 };  // red, green, blue
-const int buttPin = 23;
-int pwmg = 250;  //default: 250
-int pwmr = 200;  //default: 200
-int pwmb = 30;   //default: 30
-const int pwm[3] = { pwmr, pwmg, pwmb };
-bool LPM = 0;
-
-unsigned long lastISR = 0;
-unsigned long buttDelay = 2000; //time to wait before accepting next button press (ms)
-size_t emptyBytes;
-size_t storage;
-//gpio_num_t button =23;
-
-//int testCounter = 0;
-
-//red - error e.g. memory full
-//green - power is ON
-//blue - record mode
-/////////////////////// bluetooth
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -29,6 +9,25 @@ size_t storage;
 #include <Wire.h>
 
 #include "LittleFS.h"
+
+const int ledPin[3] = { 25, 33, 32 };  // red, green, blue
+const int buttPin = 23;
+int pwmg = 250;  //default: 250
+int pwmr = 200;  //default: 200
+int pwmb = 30;   //default: 30
+const int pwm[3] = { pwmr, pwmg, pwmb };
+bool LPM = 1;
+
+unsigned long lastISR = 0;
+unsigned long buttDelay = 2000;  //time to wait before accepting next button press (ms)
+size_t emptyBytes;
+size_t storage;
+
+int blinkCounter = 0;
+
+//red - error e.g. memory full
+//green - power is ON
+//blue - record mode
 
 Adafruit_MPU6050 mpu;
 
@@ -103,6 +102,10 @@ void sendSavedData() {
 
 void sendDataChunk() {
   if (!sendingData || !sendFile) return;
+  blinkCounter++;
+  blinkCounter %= 30;  //blinky
+  if (blinkCounter > 15) analogWrite(ledPin[2], pwmb);
+  else analogWrite(ledPin[2], 0);
 
   Record r;
   char buffer[80];
@@ -148,12 +151,11 @@ void flushBuffer() {
 
 
 
-///////////////////////// bluetooth
+///////////////////////// bluetooth end
 
 void IRAM_ATTR isr() {
 
   if (millis() - lastISR >= buttDelay) {
-    Serial.println("moooo");
     LPM = !LPM;
     lastISR = millis();
   }
@@ -169,9 +171,9 @@ void setup() {
   Serial.begin(115200);
   analogWrite(ledPin[1], pwmg);
   //////////////////////////memory
-  storage = LittleFS.totalBytes()
+  storage = LittleFS.totalBytes();
 
-  /////////////////////////////////////bluetooth
+  /////////////////////////////////////bluetooth & little fs
   while (!Serial) {
     delay(10);
   }
@@ -234,97 +236,95 @@ void setup() {
   // } else {
   //   Serial.println("LittleFS format failed!");
   // }
-  ////////////////////////////////////bluetooth end
+  ////////////////////////////////////bluetooth & little fs end
 }
 
 void loop() {
 
   if (LPM) {
     analogWrite(ledPin[2], 0);
-    // gpio_pullup_en((gpio_num_t)23);
-    // gpio_wakeup_enable((gpio_num_t)23, GPIO_INTR_LOW_LEVEL);
-    // esp_light_sleep_start();
-  } else {
-    /////////////////////////////memory check
-    emptyBytes = storage  - LittleFS.usedBytes();
-    //Serial.println(emptyBytes);
-    if(emptyBytes/storage >= 0.9) analogWrite(ledPin[0], pwmr);
+  }
+  /////////////////////////////memory check
+  emptyBytes = storage - LittleFS.usedBytes();
+  //Serial.println(emptyBytes);
+  if (emptyBytes / storage <= 0.1) analogWrite(ledPin[0], pwmr);
+  else analogWrite(ledPin[0], 0);
 
 
 
-    ///////////////////////////////////////////the fuckin thingy
-    static uint32_t sequence = 1;  // sequence counter
+  ///////////////////////////////////////////the fuckin thingy
+  static uint32_t sequence = 1;  // sequence counter
 
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
 
-    // Build a binary record
-    Record r;
-    r.seq = sequence;
-    r.x = a.acceleration.x;
-    r.y = a.acceleration.y;
-    r.z = a.acceleration.z;
+  // Build a binary record
+  Record r;
+  r.seq = sequence;
+  r.x = a.acceleration.x;
+  r.y = a.acceleration.y;
+  r.z = a.acceleration.z;
 
-    // send data in chunks
-    if (sendingData) {
-      sendDataChunk();
-      return;
+  // send data in chunks
+  if (sendingData) {
+    sendDataChunk();
+    analogWrite(ledPin[2], 0);
+    return;
+  }
+
+  // If no BLE device connected, store locally in buffer
+  if (!deviceConnected && !LPM) {
+
+    analogWrite(ledPin[2], pwmb);  //led
+                                   //mooooo
+
+    buffer[bufferIndex++] = r;
+
+    // Flush buffer to LittleFS when full
+    if (bufferIndex >= BUFFER_SIZE) {
+      flushBuffer();
     }
 
-    // If no BLE device connected, store locally in buffer
-    if (!deviceConnected) {
-      buffer[bufferIndex++] = r;
+    // debug statement
+    Serial.print(sequence);
+    Serial.print(", ");
+    Serial.print(a.acceleration.x);
+    Serial.print(", ");
+    Serial.print(a.acceleration.y);
+    Serial.print(", ");
+    Serial.println(a.acceleration.z);
 
-      // Flush buffer to LittleFS when full
-      if (bufferIndex >= BUFFER_SIZE) {
-        flushBuffer();
+    sequence++;
+
+  } else {  // Device connected, send data over BLE
+
+    if (!sendingData) {  // only send live data if not sending recorded data
+      if (deviceConnected) {
+        char bufferStr[64];
+        snprintf(bufferStr, sizeof(bufferStr), "%lu x %.3f y %.3f z %.3f",
+                 r.seq, r.x, r.y, r.z);
+
+        pTxCharacteristic->setValue(bufferStr);
+        pTxCharacteristic->notify();
+        delay(DELAY);
+
+        sequence++;
       }
-
-      // // debug statement
-      // Serial.print(sequence);
-      // Serial.print(", ");
-      // Serial.print(a.acceleration.x); Serial.print(", ");
-      // Serial.print(a.acceleration.y); Serial.print(", ");
-      // Serial.println(a.acceleration.z);
-
-      sequence++;
-
-    } else {  // Device connected, send data over BLE
-
-      if (!sendingData) {  // only send live data if not sending recorded data
-        if (deviceConnected) {
-          char bufferStr[64];
-          snprintf(bufferStr, sizeof(bufferStr), "%lu x %.3f y %.3f z %.3f",
-                   r.seq, r.x, r.y, r.z);
-
-          pTxCharacteristic->setValue(bufferStr);
-          pTxCharacteristic->notify();
-          delay(DELAY);
-
-          sequence++;
-        }
-      }
     }
+  }
 
-    // Handle BLE reconnecting
-    if (!deviceConnected && oldDeviceConnected) {
-      delay(500);
-      flushBuffer();  // Ensure remaining records are saved
-      sequence = 1;   // Reset sequence when disconnected for too long
-      pServer->startAdvertising();
-      Serial.println("Started advertising again...");
-      oldDeviceConnected = false;
-    }
+  // Handle BLE reconnecting
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500);
+    flushBuffer();  // Ensure remaining records are saved
+    sequence = 1;   // Reset sequence when disconnected for too long
+    pServer->startAdvertising();
+    Serial.println("Started advertising again...");
+    oldDeviceConnected = deviceConnected;
+  }
 
-    if (deviceConnected && !oldDeviceConnected) {
-      oldDeviceConnected = true;
-    }
-
-
-    //////////////////////////////////////////end
-    // gpio_wakeup_disable((gpio_num_t)23);
-    // pinMode(buttPin, INPUT_PULLUP);
-    // attachInterrupt(buttPin, isr, FALLING);
-    analogWrite(ledPin[2], pwmb);
+  if (deviceConnected && !oldDeviceConnected) {
+    oldDeviceConnected = deviceConnected;
   }
 }
+//////////////////////////////////////////end
