@@ -3,6 +3,7 @@ Multi-page app with Live Feed, Average Stroke, and Bluetooth Config screens.
 """
 
 import asyncio
+import os
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
@@ -19,6 +20,10 @@ class BeeWareProject(toga.App):
         self.live_plot_view = toga.ImageView(style=Pack(flex=1, padding=10))
         self.avg_plot_view = toga.ImageView(style=Pack(flex=1, padding=10))
         self.status_label = toga.Label("Idle", style=Pack(margin=5))
+        
+        # Load existing Bluetooth address from config
+        self.config_path = os.path.join(os.path.dirname(bkfb.__file__), 'Networking', 'ESP32.cfg')
+        self.bt_address = self._load_bt_address()
 
         # Create the three pages
         live_feed_page = self._create_live_feed_page()
@@ -66,12 +71,35 @@ class BeeWareProject(toga.App):
         return page_box
 
     def _create_config_page(self):
-        """Create the bluetooth configuration page (placeholder)."""
+        """Create the bluetooth configuration page with address input."""
         title_label = toga.Label(
             "Bluetooth Configuration",
             style=Pack(padding=10, font_size=16, font_weight="bold")
         )
         
+        # Bluetooth address input section
+        address_label = toga.Label(
+            "Bluetooth Device Address:",
+            style=Pack(padding=(10, 5, 5, 5))
+        )
+        
+        self.bt_address_input = toga.TextInput(
+            value=self.bt_address or "",
+            placeholder="Enter Bluetooth MAC address (e.g., AA:BB:CC:DD:EE:FF)",
+            style=Pack(padding=5, flex=1)
+        )
+        
+        save_button = toga.Button(
+            "Save Address", 
+            on_press=self.save_bt_address, 
+            style=Pack(padding=5)
+        )
+        
+        address_box = toga.Box(style=Pack(direction=ROW, padding=5))
+        address_box.add(self.bt_address_input)
+        address_box.add(save_button)
+        
+        # Connection controls
         connect_button = toga.Button("Connect", on_press=self.connect_live, style=Pack(padding=5, flex=1))
         stop_button = toga.Button("Stop", on_press=self.stop_live, style=Pack(padding=5, flex=1))
         
@@ -81,21 +109,58 @@ class BeeWareProject(toga.App):
         
         page_box = toga.Box(style=Pack(direction=COLUMN, flex=1, padding=10))
         page_box.add(title_label)
+        page_box.add(address_label)
+        page_box.add(address_box)
         page_box.add(self.status_label)
         page_box.add(controls)
         
-        # Placeholder content
-        placeholder = toga.Label(
-            "Bluetooth settings and device configuration coming soon...",
-            style=Pack(padding=20, text_align="center")
-        )
-        page_box.add(placeholder)
-        
         return page_box
+    
+    def _load_bt_address(self):
+        """Load Bluetooth address from config file."""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r") as f:
+                    return f.read().strip()
+        except Exception as e:
+            print(f"Error loading Bluetooth address: {e}")
+        return None
+    
+    async def save_bt_address(self, widget):
+        """Save Bluetooth address to config file."""
+        address = self.bt_address_input.value.strip()
+        if not address:
+            self.status_label.text = "Error: Address cannot be empty"
+            return
+        
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            
+            # Write address to config file
+            with open(self.config_path, "w") as f:
+                f.write(address)
+            
+            # Update the module-level variable in bkfb
+            bkfb.ESP32_ADDR = address
+            self.bt_address = address
+            
+            self.status_label.text = f"Address saved: {address}"
+        except Exception as e:
+            self.status_label.text = f"Error saving address: {e}"
 
     async def connect_live(self, widget):
         if self.stream_task and not self.stream_task.done():
             return
+        
+        # Update the address from the input field before connecting
+        address = self.bt_address_input.value.strip()
+        if not address:
+            self.status_label.text = "Error: Please enter a Bluetooth address"
+            return
+        
+        # Update the module-level variable in bkfb
+        bkfb.ESP32_ADDR = address
 
         self.status_label.text = "Connecting..."
         self.stop_event = asyncio.Event()
