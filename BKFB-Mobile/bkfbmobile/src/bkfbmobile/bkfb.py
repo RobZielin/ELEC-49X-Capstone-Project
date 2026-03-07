@@ -32,6 +32,8 @@ plot_avg_ax = None
 point_count = 0
 window_size = 100
 avg_stroke_update_interval = 50  # how frequently to update the average stroke plot (in points)
+show_individual_strokes = False  # toggle to show/hide individual stroke previews in average plot
+stroke_padding_samples = 5  # padding samples before/after each stroke to show troughs
 
 # BLE stuff
 save_writer = None
@@ -109,7 +111,7 @@ def _generate_avg_stroke_png(data_points):
         # Process using the standard pipeline
         raw = readData(temp_csv)
         acc = getAccelerationData(raw)
-        strokes = getStrokes(acc)
+        strokes = getStrokes(acc, padding_samples=stroke_padding_samples)
         
         os.unlink(temp_csv)
         
@@ -119,22 +121,37 @@ def _generate_avg_stroke_png(data_points):
         # Create plot
         fig, ax = plt.subplots(figsize=(8, 5))
         
-        # Plot each detected stroke
-        for i, s in enumerate(strokes):
-            ax.plot(np.arange(s.shape[0]), s, color='gray', alpha=0.6)
+        # Plot each detected stroke (optional preview)
+        if show_individual_strokes:
+            for i, s in enumerate(strokes):
+                ax.plot(np.arange(s.shape[0]), s, color='gray', alpha=0.6)
         
         # Plot average stroke
         try:
             avg_acc, avg_vel = getAverageStroke(strokes)
-            avg_curve = avg_acc[0]
-            ax.plot(np.arange(len(avg_curve)), avg_curve, color='red', linewidth=2, label='Average')
+            avg_acc_curve = avg_acc[0]
+            avg_vel_curve = avg_vel[0]
+            
+            # Plot average acceleration on primary y-axis
+            ax.plot(np.arange(len(avg_acc_curve)), avg_acc_curve, color='red', linewidth=2, label='Average Acceleration')
+            ax.set_ylabel('Acceleration (g)', color='red')
+            ax.tick_params(axis='y', labelcolor='red')
+            
+            # Create secondary y-axis for velocity
+            ax2 = ax.twinx()
+            ax2.plot(np.arange(len(avg_vel_curve)), avg_vel_curve, color='blue', linewidth=2, label='Average Velocity')
+            ax2.set_ylabel('Velocity (m/s)', color='blue')
+            ax2.tick_params(axis='y', labelcolor='blue')
+            
+            # Combine legends from both axes
+            lines1, labels1 = ax.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
         except Exception as e:
             print(f"Could not compute average: {e}")
         
         ax.set_xlabel('Sample Index')
-        ax.set_ylabel('Acceleration (g)')
         ax.set_title(f'Average Stroke ({len(strokes)} strokes detected)')
-        ax.legend()
         ax.grid(True)
         
         # Convert to PNG bytes

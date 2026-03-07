@@ -8,6 +8,7 @@ import sys
 
 from bleak import BleakClient
 
+# addresses for recieve and send
 UART_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 
@@ -15,7 +16,7 @@ UART_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 def emit(payload):
     print(json.dumps(payload), flush=True)
 
-
+# decodes incoming data
 def decode_to_float(data: bytes):
     try:
         text = data.decode("utf-8").strip()
@@ -71,7 +72,7 @@ async def run(address: str):
     async with BleakClient(address, disconnected_callback=on_disconnect) as client:
         emit({"type": "status", "text": "Connected"})
         await client.start_notify(UART_TX, on_rx)
-        await client.write_gatt_char(UART_RX, b"batman")
+        await client.write_gatt_char(UART_RX, b"batman initiated")
 
         keep_task = asyncio.create_task(keep_alive(client))
         try:
@@ -86,14 +87,7 @@ async def run(address: str):
 
 
 def main():
-    if len(sys.argv) < 2:
-        emit({"type": "error", "text": "Missing BLE address"})
-        raise SystemExit(2)
-
     address = sys.argv[1].strip()
-    if not address:
-        emit({"type": "error", "text": "Empty BLE address"})
-        raise SystemExit(2)
 
     try:
         asyncio.run(run(address))

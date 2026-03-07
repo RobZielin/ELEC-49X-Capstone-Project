@@ -44,11 +44,15 @@ def getVelocityData(averageStroke, sampling_rate_hz=15.0):
   return velocityData
 
 #separates the raw data into individual strokes, returns a list of strokes
-def getStrokes(accelerationData, plot=False):
+def getStrokes(accelerationData, plot=False, padding_samples=5):
   peakIndexes = getPeaks(accelerationData, plot=plot)
   strokeAccelerations = []
+  max_idx = len(accelerationData) - 1
   for i in range(0,len(peakIndexes)-1):
-      accStroke = accelerationData['ay'].iloc[peakIndexes[i]:peakIndexes[i+1]]
+      # Add padding before and after each stroke to show troughs
+      start_idx = max(0, peakIndexes[i] - padding_samples)
+      end_idx = min(max_idx + 1, peakIndexes[i+1] + padding_samples)
+      accStroke = accelerationData['ay'].iloc[start_idx:end_idx]
       accStroke = accStroke.to_numpy()
       strokeAccelerations.append(accStroke)
   return strokeAccelerations
