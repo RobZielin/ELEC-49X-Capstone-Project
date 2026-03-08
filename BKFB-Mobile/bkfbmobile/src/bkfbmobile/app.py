@@ -1,9 +1,11 @@
 """
 Multi-page app with Live Feed, Average Stroke, and Bluetooth Config screens.
+Responsive design for both mobile and desktop.
 """
 
 import asyncio
 import os
+import sys
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
@@ -15,6 +17,10 @@ class BeeWareProject(toga.App):
     def startup(self):
         self.stream_task = None
         self.stop_event = None
+        self.mobile_preview_forced = self._is_mobile_preview_forced()
+        
+        # Detect if running on mobile
+        self.is_mobile = self._detect_mobile()
 
         # Shared image views that will be updated by BLE stream
         self.live_plot_view = toga.ImageView(style=Pack(flex=1, padding=10))
@@ -24,11 +30,20 @@ class BeeWareProject(toga.App):
         # Load existing Bluetooth address from config
         self.config_path = os.path.join(os.path.dirname(bkfb.__file__), 'Networking', 'ESP32.cfg')
         self.bt_address = self._load_bt_address()
+        
+        # For BLE scanning
+        self.discovered_devices = {}
+        self.scanning = False
 
         # Create the three pages
-        live_feed_page = self._create_live_feed_page()
-        avg_stroke_page = self._create_avg_stroke_page()
-        config_page = self._create_config_page()
+        if self.is_mobile:
+            live_feed_page = self._create_live_feed_page_mobile()
+            avg_stroke_page = self._create_avg_stroke_page_mobile()
+            config_page = self._create_config_page_mobile()
+        else:
+            live_feed_page = self._create_live_feed_page_desktop()
+            avg_stroke_page = self._create_avg_stroke_page_desktop()
+            config_page = self._create_config_page_desktop()
 
         # Create tab container
         container = toga.OptionContainer(
@@ -43,10 +58,70 @@ class BeeWareProject(toga.App):
         self.main_window = toga.MainWindow(title=self.formal_name)
         self.main_window.content = container
         self.main_window.show()
+        
+        # Scale window only for desktop preview of mobile UI.
+        if self.mobile_preview_forced and not (self._is_android_runtime() or self._is_ios_runtime()):
+            self._set_mobile_window_size()
 
-    def _create_live_feed_page(self):
-        """Create the live feed page with real-time plot and clear button."""
-        clear_button = toga.Button("Clear", on_press=self.clear_plots, style=Pack(padding=5))
+    def _is_mobile_preview_forced(self):
+        """Return True when mobile UI is forced for desktop preview/testing."""
+        return os.environ.get("FORCE_MOBILE_UI", "").lower() in ["1", "true", "yes"]
+
+    def _is_android_runtime(self):
+        """Detect Android runtime across Python/packaging variants."""
+        if sys.platform == "android":
+            return True
+        # Some Android runtimes expose linux platform with Android env vars.
+        return any(
+            key in os.environ
+            for key in ["ANDROID_ARGUMENT", "ANDROID_BOOTLOGO", "ANDROID_STORAGE"]
+        )
+
+    def _is_ios_runtime(self):
+        """Detect iOS runtime across Python/packaging variants."""
+        if sys.platform == "ios":
+            return True
+        return "IOS_ARGUMENT" in os.environ
+    
+    def _detect_mobile(self):
+        """Detect if running on mobile platform.
+        
+        Can be overridden with FORCE_MOBILE_UI environment variable for testing.
+        Example: FORCE_MOBILE_UI=1 briefcase dev
+        """
+        # Allow forcing mobile UI for preview/testing purposes
+        if self.mobile_preview_forced:
+            return True
+
+        if self._is_android_runtime() or self._is_ios_runtime():
+            return True
+        
+        return False
+    
+    def _set_mobile_window_size(self):
+        """Set window size to mobile device aspect ratio.
+        
+        Default: Portrait (375×667 - iPhone size)
+        Landscape: Set MOBILE_LANDSCAPE=1 environment variable
+        """
+        try:
+            # Check if landscape mode is enabled
+            is_landscape = os.environ.get('MOBILE_LANDSCAPE', '').lower() in ['1', 'true', 'yes']
+            
+            if is_landscape:
+                # Standard iPhone size in landscape (667×375)
+                self.main_window.size = (667, 375)
+            else:
+                # Standard iPhone size in portrait (375×667)
+                self.main_window.size = (375, 667)
+        except Exception as e:
+            print(f"Could not set window size for mobile preview: {e}")
+    
+    # mobile ui
+    
+    def _create_live_feed_page_mobile(self):
+        """Create mobile-optimized live feed page with vertical layout."""
+        clear_button = toga.Button("Clear", on_press=self.clear_plots, style=Pack(padding=5, flex=1))
         
         controls = toga.Box(style=Pack(direction=ROW, padding=5))
         controls.add(clear_button)
@@ -56,9 +131,9 @@ class BeeWareProject(toga.App):
         page_box.add(self.live_plot_view)
         
         return page_box
-
-    def _create_avg_stroke_page(self):
-        """Create the average stroke analysis page."""
+    
+    def _create_avg_stroke_page_mobile(self):
+        """Create mobile-optimized average stroke page."""
         info_label = toga.Label(
             "Average stroke analysis appears here after collecting data",
             style=Pack(padding=10, text_align="center")
@@ -69,12 +144,26 @@ class BeeWareProject(toga.App):
         page_box.add(self.avg_plot_view)
         
         return page_box
-
-    def _create_config_page(self):
-        """Create the bluetooth configuration page with address input."""
+    
+    def _create_config_page_mobile(self):
+        """Create mobile-optimized bluetooth configuration page."""
         title_label = toga.Label(
             "Bluetooth Configuration",
-            style=Pack(padding=10, font_size=16, font_weight="bold")
+            style=Pack(padding=10, font_size=14, font_weight="bold")
+        )
+        
+        # Scan button
+        scan_button = toga.Button(
+            "Scan for Devices",
+            on_press=self.scan_devices,
+            style=Pack(padding=5, flex=1)
+        )
+        
+        # Device selection dropdown
+        self.device_selection = toga.Selection(
+            items=["No devices found"],
+            on_change=self.on_device_selected,
+            style=Pack(padding=5, flex=1)
         )
         
         # Bluetooth address input section
@@ -92,27 +181,149 @@ class BeeWareProject(toga.App):
         save_button = toga.Button(
             "Save Address", 
             on_press=self.save_bt_address, 
-            style=Pack(padding=5)
+            style=Pack(padding=5, flex=1)
         )
         
-        address_box = toga.Box(style=Pack(direction=ROW, padding=5))
-        address_box.add(self.bt_address_input)
-        address_box.add(save_button)
+        # Full-width layout for mobile
+        address_section = toga.Box(style=Pack(direction=COLUMN, padding=5, flex=1))
+        address_section.add(self.bt_address_input)
+        address_section.add(save_button)
         
-        # Connection controls
+        # Connection controls - stacked vertically on mobile
         connect_button = toga.Button("Connect", on_press=self.connect_live, style=Pack(padding=5, flex=1))
         stop_button = toga.Button("Stop", on_press=self.stop_live, style=Pack(padding=5, flex=1))
         
-        controls = toga.Box(style=Pack(direction=ROW, padding=10))
+        controls = toga.Box(style=Pack(direction=COLUMN, padding=10, flex=1))
         controls.add(connect_button)
         controls.add(stop_button)
         
         page_box = toga.Box(style=Pack(direction=COLUMN, flex=1, padding=10))
         page_box.add(title_label)
+        page_box.add(scan_button)
+        page_box.add(self.device_selection)
         page_box.add(address_label)
-        page_box.add(address_box)
+        page_box.add(address_section)
         page_box.add(self.status_label)
         page_box.add(controls)
+        
+        return page_box
+
+    # desktop ui
+
+    def _create_live_feed_page_desktop(self):
+        """Create desktop-optimized live feed page with side-by-side layout."""
+        clear_button = toga.Button("Clear", on_press=self.clear_plots, style=Pack(padding=5))
+        
+        controls = toga.Box(style=Pack(direction=ROW, padding=5))
+        controls.add(clear_button)
+        controls.add(toga.Divider(style=Pack(flex=1)))  # Spacer
+        
+        page_box = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        page_box.add(controls)
+        page_box.add(self.live_plot_view)
+        
+        return page_box
+    
+    def _create_avg_stroke_page_desktop(self):
+        """Create desktop-optimized average stroke page."""
+        title_label = toga.Label(
+            "Average Stroke Analysis",
+            style=Pack(padding=10, font_size=16, font_weight="bold")
+        )
+        
+        info_label = toga.Label(
+            "Average stroke analysis appears here after collecting data",
+            style=Pack(padding=10, text_align="left")
+        )
+        
+        page_box = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        page_box.add(title_label)
+        page_box.add(info_label)
+        page_box.add(self.avg_plot_view)
+        
+        return page_box
+    
+    def _create_config_page_desktop(self):
+        """Create desktop-optimized bluetooth configuration page with full-width address input."""
+        title_label = toga.Label(
+            "Bluetooth Configuration",
+            style=Pack(padding=10, font_size=16, font_weight="bold")
+        )
+        
+        # Scan section
+        scan_label = toga.Label(
+            "Device Discovery:",
+            style=Pack(padding=(10, 5, 5, 5), font_weight="bold")
+        )
+        
+        scan_button = toga.Button(
+            "Scan for Devices",
+            on_press=self.scan_devices,
+            style=Pack(padding=5, width=150)
+        )
+        
+        # Device selection dropdown
+        self.device_selection = toga.Selection(
+            items=["No devices found"],
+            on_change=self.on_device_selected,
+            style=Pack(padding=5, flex=1, width=400)
+        )
+        
+        scan_row = toga.Box(style=Pack(direction=ROW, padding=5))
+        scan_row.add(scan_button)
+        scan_row.add(self.device_selection)
+        
+        # Address configuration section - full width for readability
+        address_label = toga.Label(
+            "Bluetooth Device Address:",
+            style=Pack(padding=(10, 5, 5, 5), font_weight="bold")
+        )
+        
+        self.bt_address_input = toga.TextInput(
+            value=self.bt_address or "",
+            placeholder="Enter Bluetooth MAC address (e.g., AA:BB:CC:DD:EE:FF)",
+            style=Pack(padding=5, flex=1, width=400)
+        )
+        
+        save_button = toga.Button(
+            "Save Address", 
+            on_press=self.save_bt_address, 
+            style=Pack(padding=5, width=120)
+        )
+        
+        # Full-width input with button on the right
+        address_input_row = toga.Box(style=Pack(direction=ROW, padding=5))
+        address_input_row.add(self.bt_address_input)
+        address_input_row.add(save_button)
+        
+        # Status display
+        status_box = toga.Box(style=Pack(direction=ROW, padding=5))
+        status_box.add(self.status_label)
+        
+        # Connection controls section
+        control_section = toga.Box(style=Pack(direction=COLUMN, padding=10))
+        
+        control_title = toga.Label(
+            "Connection Controls",
+            style=Pack(padding=5, font_size=14, font_weight="bold")
+        )
+        
+        connect_button = toga.Button("Connect", on_press=self.connect_live, style=Pack(padding=5, flex=1))
+        stop_button = toga.Button("Stop", on_press=self.stop_live, style=Pack(padding=5, flex=1))
+        
+        control_section.add(control_title)
+        control_section.add(connect_button)
+        control_section.add(stop_button)
+        
+        # Combine everything vertically for better readability
+        page_box = toga.Box(style=Pack(direction=COLUMN, flex=1, padding=10))
+        page_box.add(title_label)
+        page_box.add(scan_label)
+        page_box.add(scan_row)
+        page_box.add(address_label)
+        page_box.add(address_input_row)
+        page_box.add(status_box)
+        page_box.add(control_section)
         
         return page_box
     
@@ -125,6 +336,67 @@ class BeeWareProject(toga.App):
         except Exception as e:
             print(f"Error loading Bluetooth address: {e}")
         return None
+    
+    async def scan_devices(self, widget):
+        """Scan for nearby BLE devices."""
+        if self.scanning:
+            return
+        
+        self.scanning = True
+        self.status_label.text = "Scanning for devices..."
+        self.discovered_devices = {}
+        
+        try:
+            if self.is_mobile:
+                # Use bleekWare scanner on Android/iOS
+                from bkfbmobile.bleekWare.Scanner import Scanner
+                
+                scanner = Scanner()
+                await scanner.start()
+                await asyncio.sleep(5)  # Scan for 5 seconds
+                await scanner.stop()
+                
+                devices = scanner.discovered_devices
+                for device in devices:
+                    name = device.name or "Unknown"
+                    addr = device.address
+                    self.discovered_devices[f"{name} ({addr})"] = addr
+            else:
+                # Use bleak scanner on desktop
+                try:
+                    from bleak import BleakScanner
+                    
+                    devices = await BleakScanner.discover(timeout=5.0)
+                    for device in devices:
+                        name = device.name or "Unknown"
+                        addr = device.address
+                        self.discovered_devices[f"{name} ({addr})"] = addr
+                except ImportError:
+                    self.status_label.text = "Error: BLE scanning not available on this platform"
+                    self.scanning = False
+                    return
+            
+            if self.discovered_devices:
+                # Update selection widget
+                self.device_selection.items = list(self.discovered_devices.keys())
+                self.status_label.text = f"Found {len(self.discovered_devices)} device(s)"
+            else:
+                self.device_selection.items = ["No devices found"]
+                self.status_label.text = "No BLE devices found"
+                
+        except Exception as e:
+            self.status_label.text = f"Scan error: {e}"
+            print(f"Scan error: {e}")
+        finally:
+            self.scanning = False
+    
+    def on_device_selected(self, widget):
+        """Handle device selection from dropdown."""
+        selected = self.device_selection.value
+        if selected and selected in self.discovered_devices:
+            address = self.discovered_devices[selected]
+            self.bt_address_input.value = address
+            self.status_label.text = f"Selected: {selected}"
     
     async def save_bt_address(self, widget):
         """Save Bluetooth address to config file."""
@@ -175,13 +447,19 @@ class BeeWareProject(toga.App):
             self.status_label.text = status
 
         async def runner():
-            await bkfb.connect_live_in_app(
-                on_update,
-                stop_event=self.stop_event,
-                on_status=on_status,
-            )
-            self.status_label.text = "Idle"
-            self.stream_task = None
+            try:
+                await bkfb.connect_live_in_app(
+                    on_update,
+                    stop_event=self.stop_event,
+                    on_status=on_status,
+                )
+                self.status_label.text = "Idle"
+            except Exception as e:
+                error_msg = f"Connection error: {e}"
+                print(error_msg)
+                self.status_label.text = error_msg
+            finally:
+                self.stream_task = None
 
         self.stream_task = asyncio.create_task(runner())
 
@@ -201,6 +479,15 @@ class BeeWareProject(toga.App):
             self.avg_plot_view.image = toga.Image(src=avg_png)
         else:
             self.avg_plot_view.image = None
+
+    def on_exit(self):
+        # Ensure BLE stream is asked to stop, then force-kill any lingering worker.
+        if self.stop_event:
+            self.stop_event.set()
+        if self.stream_task and not self.stream_task.done():
+            self.stream_task.cancel()
+        bkfb.force_stop_worker_sync()
+        return True
 
 
 def main():

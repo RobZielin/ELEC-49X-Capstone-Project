@@ -1,16 +1,19 @@
 # main bkfb app component, connects to esp32 and streams live data into the app for viewing and analysis
 
 import asyncio
+import atexit
 import json
 import os
+import signal
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 import sys
 from io import BytesIO
 
-# import rebecca's stroke analysis code and bluetooth data writer
-from bkfbmobile.AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
+# Stroke analysis (pandas/scipy) is imported lazily when needed
+# This allows the app to start on Android where these packages aren't available
+from bkfbmobile.Networking import ble_runtime
 
 # load address from config
 config_path = os.path.join(os.path.dirname(__file__), 'Networking', 'ESP32.cfg')
@@ -37,6 +40,9 @@ stroke_padding_samples = 5  # padding samples before/after each stroke to show t
 
 # BLE stuff
 save_writer = None
+_active_worker = None
+_active_worker_pid = None
+_shutdown_hooks_registered = False
 
 def _recent_series(points, size):
     start_idx = max(0, len(points['z']) - size)
@@ -70,7 +76,7 @@ def _generate_plot_png(data_points):
                 ax.plot(x_indices, recent[coord], color=colors[coord], label=coord.upper(), linewidth=2)
         
         ax.set_xlabel('Point Index')
-        ax.set_ylabel('Measured Value (g)')
+        ax.set_ylabel('Measured Value (m/s^2)')
         ax.set_title('Real-Time Data Replay')
         ax.set_xlim(start_idx, end_idx)
         if all_recent:
@@ -95,6 +101,14 @@ def _generate_avg_stroke_png(data_points):
     """Generate a PNG image of the average stroke plot."""
     try:
         if len(data_points['z']) < 20:
+            return None
+        
+        # Lazy import stroke analysis - check if available on this platform
+        try:
+            from bkfbmobile.AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
+        except ImportError as e:
+            # pandas/scipy not available (e.g., on Android)
+            print(f"Stroke analysis not available: {e}")
             return None
         
         # Create temporary CSV for processing
@@ -186,23 +200,92 @@ async def _set_status(on_status, text):
     if on_status:
         await on_status(text)
 
-# needs to be reworked, currently creates a subprocess which is stinky
-async def connect_live_in_app(on_update, stop_event=None, on_status=None):
-    """Connect to ESP32 over BLE and stream live plots into the app window."""
 
-    if stop_event is None:
-        stop_event = asyncio.Event()
-
-    if not ESP32_ADDR:
-        await _set_status(on_status, "ESP32 address missing in Networking/ESP32.cfg")
+def _register_shutdown_hooks():
+    global _shutdown_hooks_registered
+    if _shutdown_hooks_registered:
         return
 
-    _reset_live_data()
-    await _set_status(on_status, f"Connecting to {ESP32_ADDR}...")
+    atexit.register(force_stop_worker_sync)
+
+    # kill
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _handle_shutdown_signal)
+        except (ValueError, RuntimeError):
+            continue
+
+    _shutdown_hooks_registered = True
+
+
+def _handle_shutdown_signal(signum, _frame):
+    force_stop_worker_sync()
+    raise SystemExit(128 + int(signum))
+
+
+def force_stop_worker_sync():
+    """Best-effort immediate stop for any active BLE worker process."""
+    global _active_worker, _active_worker_pid
+
+    worker = _active_worker
+    worker_pid = _active_worker_pid
+
+    if worker is not None:
+        try:
+            if worker.returncode is None:
+                worker.terminate()
+        except Exception:
+            pass
+
+    if worker_pid is not None:
+        try:
+            if os.name == "posix":
+                os.killpg(worker_pid, signal.SIGTERM)
+            else:
+                os.kill(worker_pid, signal.SIGTERM)
+        except Exception:
+            pass
+
+
+async def shutdown_live_stream(stop_event=None):
+    """Application-level shutdown hook for BLE resources."""
+    if stop_event is not None:
+        stop_event.set()
+
+    force_stop_worker_sync()
+
+
+def _is_mobile_platform() -> bool:
+    if sys.platform in {"android", "ios"}:
+        return True
+    # Some Android runtime variants expose linux platform with Android env vars.
+    return any(
+        key in os.environ
+        for key in ["ANDROID_ARGUMENT", "ANDROID_BOOTLOGO", "ANDROID_STORAGE", "IOS_ARGUMENT"]
+    )
+
+
+def _enqueue_sample(loop, queue, x_value, y_value, z_value):
+    loop.call_soon_threadsafe(queue.put_nowait, (x_value, y_value, z_value))
+
+
+async def _run_worker_stream(on_update, stop_event, on_status):
+    global _active_worker, _active_worker_pid
 
     env = os.environ.copy()
     env["PYTHONDEVMODE"] = "0"
     env["PYTHONMALLOC"] = "malloc"
+    env["PYTHONASYNCIODEBUG"] = "0"
+
+    _register_shutdown_hooks()
+
+    spawn_kwargs = {}
+    if os.name == "posix":
+        # Dedicated process group enables reliable kill of child on shutdown.
+        spawn_kwargs["start_new_session"] = True
 
     worker = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -212,7 +295,11 @@ async def connect_live_in_app(on_update, stop_event=None, on_status=None):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        **spawn_kwargs,
     )
+
+    _active_worker = worker
+    _active_worker_pid = worker.pid
 
     try:
         while not stop_event.is_set():
@@ -269,6 +356,8 @@ async def connect_live_in_app(on_update, stop_event=None, on_status=None):
             except asyncio.TimeoutError:
                 worker.kill()
                 await worker.wait()
+        _active_worker = None
+        _active_worker_pid = None
 
     if worker.returncode not in (0, None):
         stderr_text = ""
@@ -284,6 +373,94 @@ async def connect_live_in_app(on_update, stop_event=None, on_status=None):
         return
 
     await _set_status(on_status, "Stopped")
+
+
+async def _run_in_process_stream(on_update, stop_event, on_status):
+    sample_queue: asyncio.Queue[tuple[float, float, float]] = asyncio.Queue()
+    stream_done = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    
+    # Wrapper to properly await status updates
+    async def status_wrapper(text: str) -> None:
+        await _set_status(on_status, text)
+
+    async def consume_samples():
+        global point_count
+        last_rendered_point_count = 0
+
+        while not stream_done.is_set() or not sample_queue.empty():
+            try:
+                x_value, y_value, z_value = await asyncio.wait_for(
+                    sample_queue.get(), timeout=0.1
+                )
+                # Append the first sample we awaited.
+                data_points['x'].append(x_value)
+                data_points['y'].append(y_value)
+                data_points['z'].append(z_value)
+                point_count += 1
+
+                # Drain any queued samples to keep up with BLE bursts.
+                while not sample_queue.empty():
+                    x_value, y_value, z_value = sample_queue.get_nowait()
+                    data_points['x'].append(x_value)
+                    data_points['y'].append(y_value)
+                    data_points['z'].append(z_value)
+                    point_count += 1
+            except asyncio.TimeoutError:
+                pass
+
+            if point_count == last_rendered_point_count:
+                continue
+
+            plot_png = _generate_plot_png(data_points)
+            avg_png = None
+            if point_count % avg_stroke_update_interval == 0:
+                avg_png = _generate_avg_stroke_png(data_points)
+
+            if plot_png:
+                await on_update(plot_png, avg_png)
+                last_rendered_point_count = point_count
+
+    consume_task = asyncio.create_task(consume_samples())
+
+    try:
+        await ble_runtime.stream_samples(
+            ESP32_ADDR,
+            on_sample=lambda x, y, z: _enqueue_sample(loop, sample_queue, x, y, z),
+            stop_event=stop_event,
+            on_status=status_wrapper,
+        )
+    except Exception as exc:
+        await _set_status(on_status, f"BLE stream error: {exc}")
+        print(f"BLE stream exception: {exc}")
+        import traceback
+        traceback.print_exc()
+        return
+    finally:
+        stream_done.set()
+        await consume_task
+
+    if stop_event.is_set():
+        await _set_status(on_status, "Stopped")
+
+async def connect_live_in_app(on_update, stop_event=None, on_status=None):
+    """Connect to ESP32 over BLE and stream live plots into the app window."""
+
+    if stop_event is None:
+        stop_event = asyncio.Event()
+
+    if not ESP32_ADDR:
+        await _set_status(on_status, "ESP32 address missing in Networking/ESP32.cfg")
+        return
+
+    _reset_live_data()
+    await _set_status(on_status, f"Connecting to {ESP32_ADDR}...")
+
+    if _is_mobile_platform():
+        await _run_in_process_stream(on_update, stop_event, on_status)
+    else:
+        await _run_worker_stream(on_update, stop_event, on_status)
 
 
 if __name__ == "__main__":

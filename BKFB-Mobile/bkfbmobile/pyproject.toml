@@ -31,11 +31,13 @@ universal_build = true
 requires = [
     "toga-cocoa~=0.5.0",
     "std-nslog~=1.0.3",
+    "bleak>=0.22",
 ]
 
 [tool.briefcase.app.bkfbmobile.linux]
 requires = [
     "toga-gtk~=0.5.0",
+    "bleak>=0.22",
     # PyGObject 3.52.1 enforces a requirement on libgirepository-2.0-dev. This library
     # isn't available on Debian 12/Ubuntu 22.04. If you don't need to support those (or
     # older) releases, you can remove this version pin. See beeware/toga#3143.
@@ -162,6 +164,7 @@ flatpak_sdk = "org.gnome.Sdk"
 [tool.briefcase.app.bkfbmobile.windows]
 requires = [
     "toga-winforms~=0.5.0",
+    "bleak>=0.22",
 ]
 
 # Mobile deployments
@@ -169,14 +172,30 @@ requires = [
 requires = [
     "toga-iOS~=0.5.0",
     "std-nslog~=1.0.3",
+    "bleak>=0.22",
 ]
 
 [tool.briefcase.app.bkfbmobile.android]
 requires = [
     "toga-android~=0.5.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+    # Note: pandas and scipy are not available for Android via Chaquopy
+    # Stroke analysis features will be disabled on Android
 ]
 
 base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
+
+build_gradle_extra_content = "android.defaultConfig.python.staticProxy('bkfbmobile.bleekWare.Scanner', 'bkfbmobile.bleekWare.Client')"
+
+android_manifest_extra_content = """
+<uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\" />
+<uses-permission android:name=\"android.permission.BLUETOOTH_ADMIN\" android:maxSdkVersion=\"30\" />
+<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\" />
+<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\" />
+<uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\" android:usesPermissionFlags=\"neverForLocation\" />
+<uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\" />
+"""
 
 build_gradle_dependencies = [
     "com.google.android.material:material:1.13.0",

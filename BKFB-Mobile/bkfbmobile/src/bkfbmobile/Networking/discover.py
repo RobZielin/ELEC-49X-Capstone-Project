@@ -1,11 +1,12 @@
-# used to find nearby BLE devices for use in bluetooth.py
-
-from bleak import BleakScanner
 import asyncio
 
+from bkfbmobile.Networking import ble_runtime
+
 async def main():
-    devices = await BleakScanner.discover()
+    devices = await ble_runtime.discover()
     for d in devices:
         print(d)
 
-asyncio.run(main())
+
+if __name__ == "__main__":
+    asyncio.run(main())
