@@ -34,9 +34,26 @@ plot_avg_fig = None
 plot_avg_ax = None
 point_count = 0
 window_size = 100
-avg_stroke_update_interval = 50  # how frequently to update the average stroke plot (in points)
-show_individual_strokes = False  # toggle to show/hide individual stroke previews in average plot
-stroke_padding_samples = 5  # padding samples before/after each stroke to show troughs
+avg_stroke_update_interval = 25  # how often to update
+show_individual_strokes = False  # show stroke preview
+stroke_padding_samples = 1  # padding
+stroke_axis = 'y'  # axis (configurable in app)
+stroke_direction = 1  # +1 or -1 (configurable in app)
+
+
+def set_stroke_axis(axis):
+    """Set accelerometer axis used for stroke analysis."""
+    global stroke_axis
+    candidate = (axis or '').strip().lower()
+    if candidate not in ('x', 'y', 'z'):
+        candidate = 'y'
+    stroke_axis = candidate
+
+
+def set_stroke_direction(direction):
+    """Set stroke direction sign (+1 or -1)."""
+    global stroke_direction
+    stroke_direction = 1 if int(direction) >= 0 else -1
 
 # BLE stuff
 save_writer = None
@@ -124,7 +141,7 @@ def _generate_avg_stroke_png(data_points):
         
         # Process using the standard pipeline
         raw = readData(temp_csv)
-        acc = getAccelerationData(raw)
+        acc = getAccelerationData(raw, axis=stroke_axis)
         strokes = getStrokes(acc, padding_samples=stroke_padding_samples)
         
         os.unlink(temp_csv)
@@ -142,21 +159,21 @@ def _generate_avg_stroke_png(data_points):
         
         # Plot average stroke
         try:
-            avg_acc, avg_vel = getAverageStroke(strokes)
+            avg_acc, avg_vel = getAverageStroke(strokes, direction=stroke_direction)
             avg_acc_curve = avg_acc[0]
             avg_vel_curve = avg_vel[0]
             
-            # Plot average acceleration on primary y-axis
-            ax.plot(np.arange(len(avg_acc_curve)), avg_acc_curve, color='red', linewidth=2, label='Average Acceleration')
-            ax.set_ylabel('Acceleration (g)', color='red')
-            ax.tick_params(axis='y', labelcolor='red')
-            
-            # Create secondary y-axis for velocity
+            # Primary axis (left): velocity
+            ax.plot(np.arange(len(avg_vel_curve)), avg_vel_curve, color='blue', linewidth=2, label='Average Velocity')
+            ax.set_ylabel('Velocity (m/s)', color='blue')
+            ax.tick_params(axis='y', labelcolor='blue')
+
+            # Secondary axis (right): acceleration
             ax2 = ax.twinx()
-            ax2.plot(np.arange(len(avg_vel_curve)), avg_vel_curve, color='blue', linewidth=2, label='Average Velocity')
-            ax2.set_ylabel('Velocity (m/s)', color='blue')
-            ax2.tick_params(axis='y', labelcolor='blue')
-            
+            ax2.plot(np.arange(len(avg_acc_curve)), avg_acc_curve, color='red', linewidth=2, label='Average Acceleration')
+            ax2.set_ylabel('Acceleration (g)', color='red')
+            ax2.tick_params(axis='y', labelcolor='red')
+
             # Combine legends from both axes
             lines1, labels1 = ax.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
@@ -165,7 +182,7 @@ def _generate_avg_stroke_png(data_points):
             print(f"Could not compute average: {e}")
         
         ax.set_xlabel('Sample Index')
-        ax.set_title(f'Average Stroke ({len(strokes)} strokes detected)')
+        ax.set_title(f'Average Stroke ({len(strokes)} strokes detected, {stroke_axis.upper()} axis)')
         ax.grid(True)
         
         # Convert to PNG bytes
@@ -182,6 +199,104 @@ def _generate_avg_stroke_png(data_points):
         traceback.print_exc()
         return None
 
+
+def _generate_last_two_strokes_png(data_points):
+    """Generate a PNG image comparing acceleration and velocity of the last two strokes."""
+    try:
+        if len(data_points['z']) < 20:
+            return None
+
+        try:
+            from bkfbmobile.AU.averageStroke import getStrokes, readData, getAccelerationData, getVelocityData
+        except ImportError as e:
+            print(f"Stroke comparison not available: {e}")
+            return None
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            temp_csv = f.name
+            f.write('Time,Sensor1,Sensor2,Sensor3\n')
+            for i in range(len(data_points['z'])):
+                x_val = data_points['x'][i] if i < len(data_points['x']) else 0
+                y_val = data_points['y'][i] if i < len(data_points['y']) else 0
+                z_val = data_points['z'][i]
+                f.write(f'{i * 66666666},{x_val},{y_val},{z_val}\n')
+
+        raw = readData(temp_csv)
+        acc = getAccelerationData(raw, axis=stroke_axis)
+        strokes = getStrokes(acc, padding_samples=stroke_padding_samples)
+
+        os.unlink(temp_csv)
+
+        if len(strokes) < 2:
+            return None
+
+        stroke_prev = np.asarray(strokes[-2], dtype=float)
+        stroke_last = np.asarray(strokes[-1], dtype=float)
+
+        vel_prev = np.asarray(getVelocityData(stroke_prev, direction=stroke_direction), dtype=float)
+        vel_last = np.asarray(getVelocityData(stroke_last, direction=stroke_direction), dtype=float)
+
+        fig, ax_vel = plt.subplots(figsize=(8, 5))
+
+        # Primary axis: compare velocity curves for previous and latest stroke.
+        line_prev_vel, = ax_vel.plot(
+            np.arange(len(vel_prev)),
+            vel_prev,
+            color='red',
+            linewidth=2,
+            label='Previous'
+        )
+        line_last_vel, = ax_vel.plot(
+            np.arange(len(vel_last)),
+            vel_last,
+            color='blue',
+            linewidth=2,
+            label='Current'
+        )
+        ax_vel.set_xlabel('Sample Index')
+        ax_vel.set_ylabel('Velocity (m/s)', color='blue')
+        ax_vel.tick_params(axis='y', labelcolor='blue')
+        ax_vel.grid(True)
+
+        # Secondary axis: acceleration of latest stroke (Stroke 1).
+        ax_acc = ax_vel.twinx()
+        line_last_acc, = ax_acc.plot(
+            np.arange(len(stroke_last)),
+            stroke_last,
+            color='green',
+            linewidth=2,
+            label='Current Stroke Acceleration'
+        )
+        ax_acc.set_ylabel('Acceleration (g)', color='green')
+        ax_acc.tick_params(axis='y', labelcolor='green')
+
+        acc_data_min = float(np.min(stroke_last))
+        acc_data_max = float(np.max(stroke_last))
+        acc_half = max(abs(acc_data_min), abs(acc_data_max)) * 1.5
+        ax_acc.set_ylim(-acc_half, acc_half)
+
+        ax_vel.set_title(f'Compare Stroke: Velocity + Current Stroke Acceleration ({stroke_axis.upper()} axis)')
+        ax_vel.legend([line_prev_vel, line_last_vel, line_last_acc], [
+            'Previous',
+            'Current',
+            'Current Stroke Acceleration'
+        ], loc='upper right')
+
+        buf = BytesIO()
+        fig.tight_layout()
+        fig.savefig(buf, format='png', dpi=80, bbox_inches='tight')
+        buf.seek(0)
+        png_data = buf.getvalue()
+        plt.close(fig)
+
+        return png_data
+    except Exception as e:
+        print(f"Error generating last-two-strokes PNG: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 # when reset button is pressed
 def _reset_live_data():
     global data_points, point_count, save_writer
@@ -193,7 +308,7 @@ def _reset_live_data():
 def clear_in_app_plots():
     """Clear accumulated live data and return refreshed plot images."""
     _reset_live_data()
-    return _generate_plot_png(data_points), None
+    return _generate_plot_png(data_points), None, None
 
 
 async def _set_status(on_status, text):
@@ -337,11 +452,13 @@ async def _run_worker_stream(on_update, stop_event, on_status):
 
                 plot_png = _generate_plot_png(data_points)
                 avg_png = None
+                compare_png = None
                 if point_count % avg_stroke_update_interval == 0:
                     avg_png = _generate_avg_stroke_png(data_points)
+                    compare_png = _generate_last_two_strokes_png(data_points)
 
                 if plot_png:
-                    await on_update(plot_png, avg_png)
+                    await on_update(plot_png, avg_png, compare_png)
             elif kind == "error":
                 await _set_status(on_status, message.get("text", "Connection error"))
                 return
@@ -415,11 +532,13 @@ async def _run_in_process_stream(on_update, stop_event, on_status):
 
             plot_png = _generate_plot_png(data_points)
             avg_png = None
+            compare_png = None
             if point_count % avg_stroke_update_interval == 0:
                 avg_png = _generate_avg_stroke_png(data_points)
+                compare_png = _generate_last_two_strokes_png(data_points)
 
             if plot_png:
-                await on_update(plot_png, avg_png)
+                await on_update(plot_png, avg_png, compare_png)
                 last_rendered_point_count = point_count
 
     consume_task = asyncio.create_task(consume_samples())

@@ -3,6 +3,7 @@
 # modified to work with live data using a sample rate
 # some changes made to avoid deprecated pandas indexing warnings 
 # (original likely made with an older version of pandas)
+# added padding and configuration for direction and axis
 
 import numpy
 import pandas
@@ -11,7 +12,7 @@ from scipy import signal
 from matplotlib import pyplot as plt
 
 # sample rate for live data
-SAMPLE_RATE_HZ = 15.0
+SAMPLE_RATE_HZ = 20
 
 #reads the data from a csv file, returns data as a pandas array of accelerometer data
 def readData(filePath):
@@ -20,31 +21,38 @@ def readData(filePath):
   return rawData
 
 #computes acceleration and time for raw data (according to Sean's formulas)
-def getAccelerationData(rawData):
+def getAccelerationData(rawData, axis='y'):
   time0 = rawData['Time'].iloc[0]
   rawData = rawData.astype('float64')
+  axis = (axis or 'y').strip().lower()
+  axis_to_sensor = {
+      'x': 'Sensor1',
+      'y': 'Sensor2',
+      'z': 'Sensor3',
+  }
+  sensor_col = axis_to_sensor.get(axis, 'Sensor2')
   times = []
   ay_vals = []
   for i in range(0, len(rawData.index)):
     originalTime = rawData['Time'].iloc[i]
     convertedTime = ((originalTime - time0)/100000000.0)*60.0
-    ay = -rawData['Sensor2'].iloc[i]/9.81
+    ay = -rawData[sensor_col].iloc[i]/9.81
     times.append(convertedTime)
     ay_vals.append(ay)
   accelerationData = pandas.DataFrame({'time': times, 'ay': ay_vals})
   return accelerationData
 
-def getVelocityData(averageStroke, sampling_rate_hz=15.0):
+def getVelocityData(averageStroke, sampling_rate_hz=50.0, direction=1):
   v0 = 0
   velocityData = [0]
   for i in range(1, len(averageStroke)):
-    vy = v0 + averageStroke[i] * (1.0 / sampling_rate_hz) * 9.81
+    vy = v0 + direction * averageStroke[i] * (1.0 / sampling_rate_hz) * 9.81
     velocityData.append(vy)
     v0 = vy
   return velocityData
 
 #separates the raw data into individual strokes, returns a list of strokes
-def getStrokes(accelerationData, plot=False, padding_samples=5):
+def getStrokes(accelerationData, plot=False, padding_samples=1):
   peakIndexes = getPeaks(accelerationData, plot=plot)
   strokeAccelerations = []
   max_idx = len(accelerationData) - 1
@@ -103,7 +111,7 @@ def showAveragePlot(acceleration = None,velocity = None):
   plt.show()
 
 #Computes the average stroke from the resampled strokes
-def getAverageStroke(allStrokes, sampling_rate_hz=SAMPLE_RATE_HZ):
+def getAverageStroke(allStrokes, sampling_rate_hz=SAMPLE_RATE_HZ, direction=1):
   sampleLengths = [x.shape[0] for x in allStrokes]
   mostCommonNumSamples, resampleIndexes = getMostCommonNumSamples(sampleLengths)
   resampledStrokes = ressampleStrokes(allStrokes, resampleIndexes, mostCommonNumSamples)
@@ -114,7 +122,7 @@ def getAverageStroke(allStrokes, sampling_rate_hz=SAMPLE_RATE_HZ):
   for i in range(0,len(averageStroke)):
     stdDevLower.append(averageStroke[i]-stdDeviation[i])
     stdDevUpper.append(averageStroke[i]+stdDeviation[i])
-  averageVelocity = getVelocityData(averageStroke, sampling_rate_hz=sampling_rate_hz)
+  averageVelocity = getVelocityData(averageStroke, sampling_rate_hz=sampling_rate_hz, direction=direction)
   velocityStdDevLower = []
   velocitystdDevUpper = []
   for i in range(0,len(averageVelocity)):

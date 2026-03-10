@@ -162,6 +162,47 @@ def get_csv_files(data_dir):
     return sorted(csv_files)
 
 
+def _normalize_dataframe(csv_path):
+    """Load CSV and return a dataframe with numeric Sensor1/2/3 columns."""
+    df = None
+    # Try common delimiters used by exported sensor logs.
+    for sep in [';', ',']:
+        try:
+            candidate = pandas.read_csv(csv_path, sep=sep)
+            # If the wrong delimiter is used, pandas often returns one merged column.
+            if len(candidate.columns) <= 1 and sep == ';':
+                continue
+            df = candidate
+            break
+        except Exception:
+            df = None
+
+    if df is None:
+        raise ValueError("Unable to read CSV")
+
+    # Match common header variants, including seq,x,y,z format.
+    cols = {c.lower().strip(): c for c in df.columns}
+
+    def pick(*names):
+        for name in names:
+            if name in cols:
+                return cols[name]
+        return None
+
+    s1 = pick('sensor1', 'x', 'accx')
+    s2 = pick('sensor2', 'y', 'accy')
+    s3 = pick('sensor3', 'z', 'accz')
+
+    if not (s1 and s2 and s3):
+        numeric_cols = [c for c in df.columns if pandas.api.types.is_numeric_dtype(df[c])]
+        if len(numeric_cols) >= 3:
+            s1, s2, s3 = numeric_cols[:3]
+        else:
+            return None
+
+    return df[[s1, s2, s3]].rename(columns={s1: 'Sensor1', s2: 'Sensor2', s3: 'Sensor3'})
+
+
 def process_csv_file(csv_path):
     """Process a CSV file and replay data with delays."""
     global data_points, point_count, sequence_num
@@ -169,37 +210,33 @@ def process_csv_file(csv_path):
     print(f"Processing: {csv_path}")
     
     try:
-        # Read the CSV file
-        df = pandas.read_csv(csv_path, sep=';')
-        
-        if 'Sensor1' in df.columns and 'Sensor2' in df.columns and 'Sensor3' in df.columns:
-            # This is sensor data format
-            for idx, row in df.iterrows():
-                # Convert sensor values (handle both comma and period as decimal separator)
-                x_val = float(str(row['Sensor1']).replace(',', '.'))
-                y_val = float(str(row['Sensor2']).replace(',', '.'))
-                z_val = float(str(row['Sensor3']).replace(',', '.'))
-                
-                # Store data
-                data_points['x'].append(x_val)
-                data_points['y'].append(y_val)
-                data_points['z'].append(z_val)
-                point_count += 1
-                sequence_num += 1
-                
-                #print(f"Seq: {sequence_num} | X: {x_val:.3f} | Y: {y_val:.3f} | Z: {z_val:.3f}")
-                
-                # Update live plot
-                update_plot()
-                
-                # Periodically update average stroke plot
-                if point_count % avg_stroke_update_interval == 0:
-                    update_avg_stroke_plot()
-                
-                # Simulate real-time delay
-                time.sleep(DATA_POINT_DELAY)
-        else:
-            print(f"  CSV format not recognized (expected Sensor1, Sensor2, Sensor3 columns)")
+        df = _normalize_dataframe(csv_path)
+        if df is None:
+            print("  CSV format not recognized (need x/y/z or Sensor1/2/3 columns)")
+            return
+
+        for idx, row in df.iterrows():
+            # Convert sensor values (handle both comma and period as decimal separator)
+            x_val = float(str(row['Sensor1']).replace(',', '.'))
+            y_val = float(str(row['Sensor2']).replace(',', '.'))
+            z_val = float(str(row['Sensor3']).replace(',', '.'))
+
+            # Store data
+            data_points['x'].append(x_val)
+            data_points['y'].append(y_val)
+            data_points['z'].append(z_val)
+            point_count += 1
+            sequence_num += 1
+
+            # Update live plot
+            update_plot()
+
+            # Periodically update average stroke plot
+            if point_count % avg_stroke_update_interval == 0:
+                update_avg_stroke_plot()
+
+            # Simulate real-time delay
+            time.sleep(DATA_POINT_DELAY)
             
     except Exception as e:
         print(f"  Error processing file: {e}")
