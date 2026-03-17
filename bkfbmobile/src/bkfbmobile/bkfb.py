@@ -38,6 +38,30 @@ stroke_padding_samples = 1  # padding
 stroke_axis = 'y'  # axis (configurable in app)
 stroke_direction = 1  # +1 or -1 (configurable in app)
 
+# incoming-data low-pass filter settings
+LOW_PASS_CUTOFF_HZ = 10
+LOW_PASS_SAMPLE_RATE_HZ = 20.0
+_filtered_sample = {'x': None, 'y': None, 'z': None}
+
+
+def lowPassFilterSample(x_value, y_value, z_value):
+    """Apply first-order low-pass filtering to one XYZ sample."""
+    dt = 1.0 / LOW_PASS_SAMPLE_RATE_HZ
+    rc = 1.0 / (2.0 * np.pi * LOW_PASS_CUTOFF_HZ)
+    alpha = dt / (rc + dt)
+
+    output = {}
+    for axis, raw in (('x', float(x_value)), ('y', float(y_value)), ('z', float(z_value))):
+        prev = _filtered_sample[axis]
+        if prev is None:
+            filtered = raw
+        else:
+            filtered = prev + alpha * (raw - prev)
+        _filtered_sample[axis] = filtered
+        output[axis] = filtered
+
+    return output['x'], output['y'], output['z']
+
 
 def setStrokeAxis(axis):
     """Set accelerometer axis used for stroke analysis."""
@@ -122,7 +146,7 @@ def averageStroke(data_points):
         try:
             from bkfbmobile.AU.averageStroke import getStrokes, getAverageStroke, readData, getAccelerationData
         except ImportError as e:
-            # pandas/scipy not available (e.g., on Android)
+            # Optional numeric dependencies are missing in this runtime.
             print(f"Stroke analysis not available: {e}")
             return None
         
@@ -299,10 +323,11 @@ def lastTwo(data_points):
 
 # when reset button is pressed
 def reset():
-    global data_points, point_count, save_writer
+    global data_points, point_count, save_writer, _filtered_sample
     data_points = {"x": [], "y": [], "z": []}
     point_count = 0
     save_writer = None
+    _filtered_sample = {'x': None, 'y': None, 'z': None}
 
 # also when reset button is pressed
 def clearInAppPlots():
@@ -338,7 +363,7 @@ def registerShutdownHooks():
 # kill kill kill
 def handleShutdownSignal(signum, _frame):
     forceStopWorkerSync()
-    raise SystemExit(128 + int(sig@num))
+    raise SystemExit(128 + int(signum))
 
 # another attempt to kill that stupid process. grrr
 def forceStopWorkerSync():
@@ -443,9 +468,12 @@ async def runWorkerStream(on_update, stop_event, on_status):
             if kind == "status":
                 await setStatus(on_status, message.get("text", ""))
             elif kind == "sample":
-                data_points['x'].append(message["x"])
-                data_points['y'].append(message["y"])
-                data_points['z'].append(message["z"])
+                x_value, y_value, z_value = lowPassFilterSample(
+                    message["x"], message["y"], message["z"]
+                )
+                data_points['x'].append(x_value)
+                data_points['y'].append(y_value)
+                data_points['z'].append(z_value)
 
                 global point_count
                 point_count += 1
@@ -510,6 +538,7 @@ async def runInProcessStream(on_update, stop_event, on_status):
                 x_value, y_value, z_value = await asyncio.wait_for(
                     sample_queue.get(), timeout=0.1
                 )
+                x_value, y_value, z_value = lowPassFilterSample(x_value, y_value, z_value)
                 # append first sample
                 data_points['x'].append(x_value)
                 data_points['y'].append(y_value)
@@ -519,6 +548,7 @@ async def runInProcessStream(on_update, stop_event, on_status):
                 # remove queue
                 while not sample_queue.empty():
                     x_value, y_value, z_value = sample_queue.get_nowait()
+                    x_value, y_value, z_value = lowPassFilterSample(x_value, y_value, z_value)
                     data_points['x'].append(x_value)
                     data_points['y'].append(y_value)
                     data_points['z'].append(z_value)

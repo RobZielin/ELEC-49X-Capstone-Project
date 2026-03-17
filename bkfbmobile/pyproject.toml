@@ -178,10 +178,10 @@ requires = [
 [tool.briefcase.app.bkfbmobile.android]
 requires = [
     "toga-android~=0.5.0",
-    "matplotlib>=3.7.0",
-    "numpy>=1.24.0",
-    # Note: pandas and scipy are not available for Android via Chaquopy
-    # Stroke analysis features will be disabled on Android
+    "matplotlib==3.6.0",
+    "numpy",
+    "scipy",
+    "pandas",
 ]
 
 base_theme = "Theme.MaterialComponents.Light.DarkActionBar"

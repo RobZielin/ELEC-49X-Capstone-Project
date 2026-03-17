@@ -42,7 +42,7 @@ def getAccelerationData(rawData, axis='y'):
   accelerationData = pandas.DataFrame({'time': times, 'ay': ay_vals})
   return accelerationData
 
-def getVelocityData(averageStroke, sampling_rate_hz=50.0, direction=1):
+def getVelocityData(averageStroke, sampling_rate_hz=20.0, direction=1):
   v0 = 0
   velocityData = [0]
   for i in range(1, len(averageStroke)):

@@ -169,10 +169,15 @@ class BeeWareProject(toga.App):
         return page_box
     
     def createConfigPageMobile(self):
-        """Create mobile-optimized bluetooth configuration page."""
+        """Create mobile settings page with the same controls as desktop."""
         title_label = toga.Label(
             "Bluetooth Configuration",
             style=Pack(margin=10, font_size=14, font_weight="bold")
+        )
+
+        scan_label = toga.Label(
+            "Device Discovery:",
+            style=Pack(margin=(10, 5, 5, 5), font_weight="bold")
         )
         
         # Scan button
@@ -188,11 +193,15 @@ class BeeWareProject(toga.App):
             on_change=self.onDeviceSelected,
             style=Pack(margin=5, flex=1)
         )
+
+        scan_row = toga.Box(style=Pack(direction=ROW, margin=5))
+        scan_row.add(scan_button)
+        scan_row.add(self.device_selection)
         
         # Bluetooth address input section
         address_label = toga.Label(
             "Bluetooth Device Address:",
-            style=Pack(margin=(10, 5, 5, 5))
+            style=Pack(margin=(10, 5, 5, 5), font_weight="bold")
         )
         
         self.bt_address_input = toga.TextInput(
@@ -203,7 +212,7 @@ class BeeWareProject(toga.App):
 
         stroke_axis_label = toga.Label(
             "Stroke Axis:",
-            style=Pack(margin=(10, 5, 5, 5))
+            style=Pack(margin=(10, 5, 5, 5), font_weight="bold")
         )
 
         self.stroke_axis_selection = toga.Selection(
@@ -214,8 +223,8 @@ class BeeWareProject(toga.App):
         self.stroke_axis_selection.value = self.strokeAxisLabel(self.stroke_axis)
 
         stroke_direction_label = toga.Label(
-            "Stroke Direction:",
-            style=Pack(margin=(10, 5, 5, 5))
+            "Direction:",
+            style=Pack(margin=(10, 5, 5, 5), font_weight="bold")
         )
 
         self.stroke_direction_selection = toga.Selection(
@@ -226,7 +235,9 @@ class BeeWareProject(toga.App):
         self.stroke_direction_selection.value = "+" if self.stroke_direction >= 0 else "-"
 
         stroke_axis_row = toga.Box(style=Pack(direction=ROW, margin=5))
+        stroke_axis_row.add(stroke_axis_label)
         stroke_axis_row.add(self.stroke_axis_selection)
+        stroke_axis_row.add(stroke_direction_label)
         stroke_axis_row.add(self.stroke_direction_selection)
 
         save_button = toga.Button(
@@ -235,28 +246,35 @@ class BeeWareProject(toga.App):
             style=Pack(margin=5, flex=1)
         )
 
-        # Full-width layout for mobile
-        address_section = toga.Box(style=Pack(direction=COLUMN, margin=5, flex=1))
-        address_section.add(self.bt_address_input)
-        address_section.add(save_button)
+        address_input_row = toga.Box(style=Pack(direction=ROW, margin=5))
+        address_input_row.add(self.bt_address_input)
+        address_input_row.add(save_button)
         
+        status_box = toga.Box(style=Pack(direction=ROW, margin=5))
+        status_box.add(self.status_label)
+
+        control_title = toga.Label(
+            "Connection Controls",
+            style=Pack(margin=5, font_size=13, font_weight="bold")
+        )
+
         # Connection controls - stacked vertically on mobile
         connect_button = toga.Button("Connect", on_press=self.connectLive, style=Pack(margin=5, flex=1))
         stop_button = toga.Button("Stop", on_press=self.stopLive, style=Pack(margin=5, flex=1))
         
         controls = toga.Box(style=Pack(direction=COLUMN, margin=10, flex=1))
+        controls.add(control_title)
         controls.add(connect_button)
         controls.add(stop_button)
         
         page_box = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=10))
         page_box.add(title_label)
-        page_box.add(scan_button)
-        page_box.add(self.device_selection)
+        page_box.add(scan_label)
+        page_box.add(scan_row)
         page_box.add(address_label)
-        page_box.add(address_section)
-        page_box.add(stroke_axis_label)
+        page_box.add(address_input_row)
         page_box.add(stroke_axis_row)
-        page_box.add(self.status_label)
+        page_box.add(status_box)
         page_box.add(controls)
         
         return page_box
@@ -592,6 +610,7 @@ class BeeWareProject(toga.App):
         # Update the module-level variable in bkfb
         bkfb.ESP32_ADDR = address
         bkfb.setStrokeAxis(self.stroke_axis)
+        bkfb.setStrokeDirection(self.stroke_direction)
 
         self.status_label.text = "Connecting..."
         self.stop_event = asyncio.Event()
